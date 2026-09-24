@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { NavPage } from '../types';
 
 interface NavItem {
@@ -7,12 +7,11 @@ interface NavItem {
   icon: string;
 }
 
-const MAIN_NAV: NavItem[] = [
+const ALL_MAIN_NAV: NavItem[] = [
   { id: 'dashboard', label: 'Overview', icon: 'ti-home' },
   { id: 'pos', label: 'POS terminal', icon: 'ti-cash-register' },
   { id: 'posManagement', label: 'POS management', icon: 'ti-building-store' },
   { id: 'users', label: 'User management', icon: 'ti-users' },
-  // { id: 'hr', label: 'HR management', icon: 'ti-id' },
   { id: 'branches', label: 'Branch management', icon: 'ti-building' },
   { id: 'roles', label: 'Role management', icon: 'ti-shield-lock' },
   { id: 'analytics', label: 'Analytics', icon: 'ti-chart-bar' },
@@ -21,8 +20,6 @@ const MAIN_NAV: NavItem[] = [
 const SETTINGS_NAV: NavItem[] = [
   { id: 'profile', label: 'Profile', icon: 'ti-user-circle' },
   { id: 'settings', label: 'Settings', icon: 'ti-settings' },
-  // { id: 'permissions', label: 'Permissions', icon: 'ti-lock' },
-  // { id: 'audit', label: 'Audit log', icon: 'ti-file-text' },
 ];
 
 interface SidebarProps {
@@ -32,7 +29,44 @@ interface SidebarProps {
   onToggleCollapse?: () => void;
 }
 
+const getInitials = (name: string): string => {
+  if (!name) return 'U';
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .map((p) => p[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+};
+
 const Sidebar: React.FC<SidebarProps> = ({ activePage, onNavigate, collapsed = false, onToggleCollapse }) => {
+  const currentUser = useMemo(() => {
+    try {
+      const raw = localStorage.getItem('user');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const userName = currentUser?.name || currentUser?.username || 'User';
+  const roleName = typeof currentUser?.role === 'string' ? currentUser.role : currentUser?.role?.name || 'Cashier';
+  const roleLower = roleName.toLowerCase();
+
+  const isCashier = roleLower.includes('cashier');
+  const isManager = roleLower.includes('manager');
+
+  const mainNav = useMemo(() => {
+    if (isCashier) {
+      return ALL_MAIN_NAV.filter((item) => ['pos', 'dashboard', 'posManagement', 'branches', 'analytics'].includes(item.id));
+    }
+    if (isManager) {
+      return ALL_MAIN_NAV.filter((item) => ['dashboard', 'pos', 'posManagement', 'users', 'branches', 'analytics'].includes(item.id));
+    }
+    return ALL_MAIN_NAV;
+  }, [isCashier, isManager]);
+
   return (
     <aside style={{ ...styles.sidebar, ...(collapsed ? styles.sidebarCollapsed : {}) }}>
       {/* Logo */}
@@ -72,7 +106,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, onNavigate, collapsed = f
       {/* Nav */}
       <nav style={{ ...styles.nav, ...(collapsed ? styles.navCollapsed : {}) }}>
         {!collapsed && <span style={styles.navSection}>Main</span>}
-        {MAIN_NAV.map((item) => (
+        {mainNav.map((item) => (
           <button
             key={item.id}
             style={{
@@ -115,7 +149,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, onNavigate, collapsed = f
           onClick={() => onNavigate('profile')}
           aria-label="Open profile"
         >
-          <div style={styles.avatar}>SA</div>
+          <div style={styles.avatar}>{getInitials(userName)}</div>
         </button>
         {!collapsed && (
           <>
@@ -124,8 +158,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, onNavigate, collapsed = f
               onClick={() => onNavigate('profile')}
               aria-label="Open profile"
             >
-              <div style={styles.avatarName}>Super Admin</div>
-              <div style={styles.avatarRole}>System admin</div>
+              <div style={styles.avatarName}>{userName}</div>
+              <div style={styles.avatarRole}>{roleName}</div>
             </button>
             <button style={styles.iconBtn} aria-label="Settings" onClick={() => onNavigate('settings')}>
               <i className="ti ti-settings" aria-hidden="true" />

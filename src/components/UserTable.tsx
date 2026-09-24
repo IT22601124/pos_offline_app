@@ -10,7 +10,9 @@ interface UserTableProps {
 
 const roleBadge: Record<string, React.CSSProperties> = {
   Admin: { background: '#EEEDFE', color: '#534AB7' },
+  'Super Admin': { background: '#EEEDFE', color: '#534AB7' },
   Manager: { background: '#E8F1FF', color: '#1E5BA8' },
+  Cashier: { background: '#E1F5EE', color: '#0F6E56' },
   Member: { background: '#E1F5EE', color: '#0F6E56' },
   Viewer: { background: '#FAEEDA', color: '#854F0B' },
 };

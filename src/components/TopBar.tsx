@@ -1,4 +1,5 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { userLogout } from '../hooks/authentication/logout';
 
 interface TopBarProps {
@@ -16,6 +17,8 @@ const TopBar: React.FC<TopBarProps> = ({
   onToggleSidebar,
   sidebarCollapsed = false,
 }) => {
+  const navigate = useNavigate();
+
   return (
     <header style={styles.topbar}>
       {onToggleSidebar && (
@@ -50,9 +53,9 @@ const TopBar: React.FC<TopBarProps> = ({
       </button> */}
       <button
         style={{ ...styles.iconBtn, color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.2)' }}
-        onClick={() => {
+        onClick={async () => {
           if (window.confirm("Are you sure you want to log out?")) {
-            userLogout();
+            await userLogout(navigate);
           }
         }}
         aria-label="Logout"

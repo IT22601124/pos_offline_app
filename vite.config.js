@@ -4,6 +4,9 @@ export default defineConfig({
     base: './',
     plugins: [react()],
     server: {
+        watch: {
+            ignored: ['**/release/**', '**/dist/**'],
+        },
         proxy: {
             '/api': {
                 target: 'https://mpos.studiorespectweddings.com',

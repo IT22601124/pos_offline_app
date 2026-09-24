@@ -1,7 +1,9 @@
 {
   "name": "my-app",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "Nova POS Application",
+  "author": "NextGenCodex",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -11,7 +13,7 @@
     "preview": "vite preview",
     "electron": "electron .",
     "electron:dev": "concurrently \"vite\" \"wait-on https://mpos.studiorespectweddings.com && electron .\"",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && npx @electron/packager . \"nova-pos\" --platform=win32 --arch=x64 --out=release --icon=electron/icon.ico --overwrite"
   },
   "build": {
     "appId": "com.nextgenCodex.app",
@@ -24,7 +26,8 @@
       "electron/**/*"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "electron/icon.ico"
     }
   },
   "dependencies": {

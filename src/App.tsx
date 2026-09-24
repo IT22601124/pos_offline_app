@@ -57,6 +57,24 @@ const App: React.FC = () => {
   const searchQuery = searchState.page === activePage ? searchState.query : '';
   const isPosMode = activePage === 'pos';
 
+  const currentUser = useMemo(() => {
+    try {
+      const raw = localStorage.getItem('user');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }, [location.pathname]);
+
+  const userRole = (typeof currentUser?.role === 'string' ? currentUser.role : currentUser?.role?.name || '').toLowerCase();
+  const isCashier = userRole.includes('cashier');
+
+  useEffect(() => {
+    if (isCashier && ['users', 'roles'].includes(activePage)) {
+      navigate(PAGE_PATHS['pos'], { replace: true });
+    }
+  }, [isCashier, activePage, navigate]);
+
   useEffect(() => {
     let isMounted = true;
 

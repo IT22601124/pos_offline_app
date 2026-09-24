@@ -1,15 +1,24 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { userLogin } from "../../hooks/authentication/login";
+import { initializeOfflineDatabase } from "../../offline/seed";
 import axios from "axios";
 import AlertTitle from '@mui/material/AlertTitle';
 import Alert from "@mui/material/Alert";
 import Stack from "@mui/material/Stack";
 
 const LoginPage: React.FC = () => {
+  const navigate = useNavigate();
   const [mobile, setMobile] = useState("");
   const [password, setPassword] = useState("");
   const [alert, setAlert] = useState({ show: false, title: "", message: "" });
   const isFormValid = mobile.trim() !== "" && password.trim() !== "";
+
+  useEffect(() => {
+    initializeOfflineDatabase().catch((err) => {
+      console.error("Failed to seed offline database on login page:", err);
+    });
+  }, []);
 
   useEffect(() => {
     if (!alert.show) return;
@@ -30,11 +39,11 @@ const LoginPage: React.FC = () => {
       });
       return false;
     }
-    if (mobile.length < 10) {
+    if (mobile.trim().length < 1) {
       setAlert({
         show: true,
         title: "Validation Error",
-        message: "Please enter a valid mobile number",
+        message: "Please enter a valid mobile number or account ID",
       });
       return false;
     }
@@ -47,19 +56,19 @@ const LoginPage: React.FC = () => {
       if (!validations()) return;
       const response = await userLogin(mobile, password);
       if (response) {
-        console.log(response);
-        setTimeout(() => {
-          window.location.href = "/dashboard";
-        }, 1500);
+        console.log("Login successful:", response);
+        navigate("/dashboard", { replace: true });
       }
     }
-    catch (err: unknown) {
+    catch (err: any) {
       let errorMessage = "An error occurred during login";
 
-      if (axios.isAxiosError(err)) {
-        errorMessage =
-          err.response?.data?.error || "An error occurred during login";
+      if (err && typeof err === "object" && "message" in err && typeof err.message === "string") {
+        errorMessage = err.message;
+      } else if (axios.isAxiosError(err)) {
+        errorMessage = err.response?.data?.error || "An error occurred during login";
       }
+
       setAlert({
         show: true,
         title: "Login Error",
@@ -164,24 +173,30 @@ const LoginPage: React.FC = () => {
             Sign in to continue
           </p>
 
-          {/* Mobile */}
+          {/* Mobile / Account ID */}
           <div style={{ marginBottom: "20px" }}>
             <label
+              htmlFor="login-mobile-input"
               style={{
                 display: "block",
                 marginBottom: "8px",
                 fontWeight: 500,
+                color: "#0F172A",
               }}
             >
-              Mobile Number
+              Mobile Number / Account ID
             </label>
 
             <input
-              type="tel"
-              placeholder="Enter mobile number"
+              id="login-mobile-input"
+              name="username"
+              type="text"
+              placeholder="Enter mobile number or username"
               value={mobile}
               onChange={(e) => setMobile(e.target.value)}
               required
+              autoFocus
+              autoComplete="username"
               style={{
                 width: "100%",
                 padding: "12px",
@@ -189,6 +204,11 @@ const LoginPage: React.FC = () => {
                 borderRadius: "8px",
                 fontSize: "14px",
                 outline: "none",
+                background: "#ffffff",
+                color: "#0F172A",
+                cursor: "text",
+                pointerEvents: "auto",
+                boxSizing: "border-box",
               }}
             />
           </div>
@@ -196,21 +216,26 @@ const LoginPage: React.FC = () => {
           {/* Password */}
           <div style={{ marginBottom: "25px" }}>
             <label
+              htmlFor="login-password-input"
               style={{
                 display: "block",
                 marginBottom: "8px",
                 fontWeight: 500,
+                color: "#0F172A",
               }}
             >
               Password
             </label>
 
             <input
+              id="login-password-input"
+              name="password"
               type="password"
               placeholder="Enter password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
+              autoComplete="current-password"
               style={{
                 width: "100%",
                 padding: "12px",
@@ -218,6 +243,11 @@ const LoginPage: React.FC = () => {
                 borderRadius: "8px",
                 fontSize: "14px",
                 outline: "none",
+                background: "#ffffff",
+                color: "#0F172A",
+                cursor: "text",
+                pointerEvents: "auto",
+                boxSizing: "border-box",
               }}
             />
           </div>
@@ -242,6 +272,8 @@ const LoginPage: React.FC = () => {
           >
             Sign In
           </button>
+
+
 
           {/* Footer */}
           <div

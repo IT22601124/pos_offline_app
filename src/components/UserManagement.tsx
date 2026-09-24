@@ -10,7 +10,7 @@ import { createLeaveRequest } from '../hooks/hr/hr_controller';
 import { getAllBranches } from '../hooks/branch/branch_controller';
 import { getAllRoles } from '../hooks/users/role_constroller';
 
-type FilterTab = 'all' | 'active' | 'admin';
+type FilterTab = 'all' | 'active' | 'admin' | 'cashier';
 
 interface UserManagementProps {
   searchQuery: string;
@@ -104,16 +104,31 @@ const UserManagement: React.FC<UserManagementProps> = ({
         u.email.toLowerCase().includes(q) ||
         u.phone.toLowerCase().includes(q) ||
         u.branch.toLowerCase().includes(q);
+      const uRole = (u.role || '').toLowerCase();
       const matchTab =
-        tab === 'all' ? true : tab === 'active' ? u.status === 'Active' : u.role === 'Admin';
-      const matchRole = roleFilter === 'all' ? true : u.role === roleFilter;
+        tab === 'all'
+          ? true
+          : tab === 'active'
+          ? u.status === 'Active'
+          : tab === 'admin'
+          ? uRole.includes('admin') || uRole.includes('manager')
+          : tab === 'cashier'
+          ? uRole.includes('cashier')
+          : true;
+      const matchRole =
+        roleFilter === 'all'
+          ? true
+          : uRole === roleFilter.toLowerCase() ||
+            (roleFilter.toLowerCase() === 'cashier' && uRole.includes('cashier')) ||
+            (roleFilter.toLowerCase().includes('admin') && uRole.includes('admin'));
       const matchBranch = branchFilter === 'all' ? true : u.branch === branchFilter;
       return matchSearch && matchTab && matchRole && matchBranch;
     });
   }, [users, searchQuery, tab, roleFilter, branchFilter]);
 
   const activeCount = users.filter((u) => u.status === 'Active').length;
-  const adminCount = users.filter((u) => u.role === 'Admin').length;
+  const adminCount = users.filter((u) => u.role?.toLowerCase().includes('admin') || u.role?.toLowerCase().includes('manager')).length;
+  const cashierCount = users.filter((u) => u.role?.toLowerCase().includes('cashier')).length;
   const nextUserId = users.length ? Math.max(...users.map((u) => u.id)) + 1 : 1;
 
   const handleInvite = async (data: {
@@ -199,15 +214,15 @@ const UserManagement: React.FC<UserManagementProps> = ({
   };
 
   const stats = [
-    { label: 'Total users', value: users.length, delta: '↑ 2 this month', trend: 'up' as const },
+    { label: 'Total users', value: users.length, delta: 'Active team', trend: 'up' as const },
     {
       label: 'Active users',
       value: activeCount,
       delta: `${users.length ? Math.round((activeCount / users.length) * 100) : 0}% of total`,
       trend: 'up' as const,
     },
-    { label: 'Admins', value: adminCount, delta: `${adminCount} with full access`, trend: 'neutral' as const },
-    { label: 'Pending invites', value: 3, delta: '↑ 1 awaiting', trend: 'down' as const },
+    { label: 'Admins', value: adminCount, delta: `${adminCount} with management access`, trend: 'neutral' as const },
+    { label: 'Cashiers', value: cashierCount, delta: `${cashierCount} POS cashiers`, trend: 'up' as const },
   ];
 
   return (
@@ -235,7 +250,7 @@ const UserManagement: React.FC<UserManagementProps> = ({
             All users <span style={styles.countBadge}>{filtered.length}</span>
           </h2>
           <div style={styles.tabGroup}>
-            {(['all', 'active', 'admin'] as FilterTab[]).map((t) => (
+            {(['all', 'active', 'admin', 'cashier'] as FilterTab[]).map((t) => (
               <button
                 key={t}
                 style={{ ...styles.tab, ...(tab === t ? styles.tabActive : {}) }}

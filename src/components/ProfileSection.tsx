@@ -1,4 +1,6 @@
 import React, { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { userLogout } from '../hooks/authentication/logout';
 
 interface StoredUser {
   id?: number;
@@ -38,6 +40,7 @@ const getInitials = (name: string) => {
 };
 
 const ProfileSection: React.FC = () => {
+  const navigate = useNavigate();
   const storedUser = useMemo(() => getStoredUser(), []);
   const [name, setName] = useState(storedUser.name ?? storedUser.username ?? '');
   const [email, setEmail] = useState(storedUser.email ?? '');
@@ -132,6 +135,17 @@ const ProfileSection: React.FC = () => {
           </div>
 
           <div style={styles.actions}>
+            <button
+              style={{ ...styles.primaryBtn, background: '#ef4444', marginRight: 10 }}
+              onClick={async () => {
+                if (window.confirm("Are you sure you want to log out?")) {
+                  await userLogout(navigate);
+                }
+              }}
+            >
+              <i className="ti ti-logout" aria-hidden="true" />
+              Log Out
+            </button>
             <button style={styles.primaryBtn} onClick={handleSave}>
               <i className="ti ti-device-floppy" aria-hidden="true" />
               Save changes

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useOutletContext, useNavigate } from 'react-router-dom';
 import { type AdminOutletContext } from '../App';
 import {
   createPosSale,
@@ -14,6 +14,13 @@ import {
 } from '../hooks/pos/pos_controller';
 import API_RESOURCES from '../api/api_resources';
 import { kickCashDrawerPulse } from '../utils/thermal_printer';
+import {
+  offlineAddCashTransaction,
+  offlineGetActiveRegisterSession,
+  offlineSaveActiveRegisterSession,
+  offlineGetShiftHistory,
+  offlineSaveShiftHistory,
+} from '../offline/offlineAdapter';
 
 
 interface CartItem extends PosProduct {
@@ -50,6 +57,8 @@ export interface CashDrawerLogEntry {
   amount: number;
   reason?: string;
   cashierName?: string;
+  registerNo?: string;
+  shiftCode?: string;
 }
 
 export interface RegisterSession {
@@ -158,11 +167,7 @@ const loadActiveSession = (): RegisterSession | null => {
 };
 
 const saveActiveSession = (session: RegisterSession | null) => {
-  if (session) {
-    localStorage.setItem(LOCAL_REGISTER_SESSION_KEY, JSON.stringify(session));
-  } else {
-    localStorage.removeItem(LOCAL_REGISTER_SESSION_KEY);
-  }
+  offlineSaveActiveRegisterSession(session);
 };
 
 const formatMoney = (value: number) =>
@@ -213,6 +218,7 @@ const createSaleNo = () => {
 
 const PosSystem: React.FC = () => {
   const { theme } = useOutletContext<AdminOutletContext>();
+  const navigate = useNavigate();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchWrapperRef = useRef<HTMLDivElement>(null);
   const customerInputRef = useRef<HTMLInputElement>(null);
@@ -245,6 +251,11 @@ const PosSystem: React.FC = () => {
   const [weightInput, setWeightInput] = useState('1.000');
   const [isReadingScale, setIsReadingScale] = useState(false);
 
+  const loggedInUser = useMemo(() => getStoredUser(), []);
+  const cashierId = Number(loggedInUser.id);
+  const cashierName = loggedInUser.name ?? loggedInUser.username ?? 'Current cashier';
+  const cashierRole = getStoredUserRole(loggedInUser);
+
   const [activeSession, setActiveSession] = useState<RegisterSession | null>(() => loadActiveSession());
   const [showStartSessionModal, setShowStartSessionModal] = useState<boolean>(() => !loadActiveSession());
   const [showDrawerDetailsModal, setShowDrawerDetailsModal] = useState(false);
@@ -267,6 +278,217 @@ const PosSystem: React.FC = () => {
     10: 0,
   });
   const [showDenomCounter, setShowDenomCounter] = useState(false);
+
+  const [shiftHistory, setShiftHistory] = useState<RegisterSession[]>(() => {
+    try {
+      const raw = localStorage.getItem(LOCAL_SHIFT_HISTORY_KEY);
+      return raw ? (JSON.parse(raw) as RegisterSession[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [auditLogDateFilter, setAuditLogDateFilter] = useState<'today' | 'custom'>('today');
+  const [auditLogCustomDate, setAuditLogCustomDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [auditLogTypeFilter, setAuditLogTypeFilter] = useState<'all' | 'opening_float' | 'paid_in' | 'paid_out' | 'cash_sale' | 'close_shift'>('all');
+  const [auditLogSearchQuery, setAuditLogSearchQuery] = useState<string>('');
+
+  const getAllAuditLogs = useMemo(() => {
+    const allLogs: (CashDrawerLogEntry & { sessionDate: string; registerNo?: string; shiftCode?: string })[] = [];
+
+    // 1. From active session
+    if (activeSession && activeSession.cashLogs) {
+      const sDate = activeSession.openedAt
+        ? new Date(activeSession.openedAt).toISOString().slice(0, 10)
+        : new Date().toISOString().slice(0, 10);
+      activeSession.cashLogs.forEach((log) => {
+        allLogs.push({
+          ...log,
+          sessionDate: log.timestamp ? new Date(log.timestamp).toISOString().slice(0, 10) : sDate,
+          cashierName: log.cashierName || activeSession.cashierName || 'Cashier',
+          registerNo: log.registerNo || activeSession.registerNo,
+          shiftCode: log.shiftCode || activeSession.shiftCode,
+        });
+      });
+    }
+
+    // 2. From past shift history
+    shiftHistory.forEach((session) => {
+      if (session.cashLogs && session.cashLogs.length > 0) {
+        const sDate = session.openedAt ? new Date(session.openedAt).toISOString().slice(0, 10) : '';
+        session.cashLogs.forEach((log) => {
+          allLogs.push({
+            ...log,
+            sessionDate: log.timestamp ? new Date(log.timestamp).toISOString().slice(0, 10) : sDate,
+            cashierName: log.cashierName || session.cashierName || 'Cashier',
+            registerNo: log.registerNo || session.registerNo,
+            shiftCode: log.shiftCode || session.shiftCode,
+          });
+        });
+      }
+    });
+
+    // 3. From completed cash sales (if not already logged)
+    completedSales.forEach((sale) => {
+      if (sale.status === 'completed') {
+        const netCash = getSaleNetCash(sale);
+        if (netCash > 0) {
+          const saleTime = sale.sold_at || new Date().toISOString();
+          const saleDate = new Date(saleTime).toISOString().slice(0, 10);
+          const logId = `SALE-LOG-${sale.id || sale.sale_no}`;
+          const exists = allLogs.some((l) => l.id === logId || (l.reason && l.reason.includes(sale.sale_no)));
+          if (!exists) {
+            allLogs.push({
+              id: logId,
+              timestamp: saleTime,
+              type: 'cash_sale',
+              amount: netCash,
+              reason: `Cash Sale ${sale.sale_no}`,
+              cashierName: sale.cashier_name || 'Cashier',
+              sessionDate: saleDate,
+            });
+          }
+        }
+      }
+    });
+
+    // Deduplicate by ID
+    const map = new Map<string, (typeof allLogs)[0]>();
+    allLogs.forEach((item) => {
+      if (!map.has(item.id)) {
+        map.set(item.id, item);
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }, [activeSession, shiftHistory, completedSales]);
+
+  const filteredAuditLogs = useMemo(() => {
+    const todayStr = new Date().toISOString().slice(0, 10);
+
+    return getAllAuditLogs.filter((log) => {
+      const logDateStr = log.timestamp ? new Date(log.timestamp).toISOString().slice(0, 10) : log.sessionDate;
+
+      if (auditLogDateFilter === 'today' && logDateStr !== todayStr) return false;
+      if (auditLogDateFilter === 'custom' && logDateStr !== auditLogCustomDate) return false;
+
+      if (auditLogTypeFilter !== 'all' && log.type !== auditLogTypeFilter) return false;
+
+      if (auditLogSearchQuery.trim() !== '') {
+        const q = auditLogSearchQuery.toLowerCase();
+        const matchReason = (log.reason || '').toLowerCase().includes(q);
+        const matchCashier = (log.cashierName || '').toLowerCase().includes(q);
+        const matchType = (log.type || '').toLowerCase().includes(q);
+        const matchAmount = log.amount.toString().includes(q);
+        const matchReg = (log.registerNo || '').toLowerCase().includes(q);
+        const matchShift = (log.shiftCode || '').toLowerCase().includes(q);
+        if (!matchReason && !matchCashier && !matchType && !matchAmount && !matchReg && !matchShift) return false;
+      }
+
+      return true;
+    });
+  }, [getAllAuditLogs, auditLogDateFilter, auditLogCustomDate, auditLogTypeFilter, auditLogSearchQuery]);
+
+  const auditLogMetrics = useMemo(() => {
+    let totalFloat = 0;
+    let totalPaidIn = 0;
+    let totalPaidOut = 0;
+    let totalCashSales = 0;
+
+    filteredAuditLogs.forEach((log) => {
+      if (log.type === 'opening_float') totalFloat += log.amount;
+      else if (log.type === 'paid_in') totalPaidIn += log.amount;
+      else if (log.type === 'paid_out') totalPaidOut += log.amount;
+      else if (log.type === 'cash_sale') totalCashSales += log.amount;
+    });
+
+    const totalInflow = totalFloat + totalPaidIn + totalCashSales;
+    const netDrawerFlow = totalInflow - totalPaidOut;
+
+    return {
+      totalFloat,
+      totalPaidIn,
+      totalPaidOut,
+      totalCashSales,
+      totalInflow,
+      netDrawerFlow,
+      count: filteredAuditLogs.length,
+    };
+  }, [filteredAuditLogs]);
+
+  const handlePrintDailyAuditLog = () => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return;
+
+    const dateLabel =
+      auditLogDateFilter === 'today'
+        ? `Today (${new Date().toLocaleDateString()})`
+        : `Date: ${auditLogCustomDate}`;
+
+    const rowsHtml = filteredAuditLogs
+      .map(
+        (log) => `
+      <tr>
+        <td>${new Date(log.timestamp).toLocaleString()}</td>
+        <td><strong>${log.type.toUpperCase().replace('_', ' ')}</strong></td>
+        <td>${log.cashierName || 'Cashier'} ${log.registerNo ? `(${log.registerNo})` : ''}</td>
+        <td>${log.reason || '-'}</td>
+        <td style="text-align:right; font-weight:bold; color:${log.type === 'paid_out' ? '#dc2626' : '#16a34a'}">
+          ${log.type === 'paid_out' ? '-' : '+'}${log.amount.toFixed(2)} LKR
+        </td>
+      </tr>
+    `
+      )
+      .join('');
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Daily Cash Drawer Audit Log - ${dateLabel}</title>
+          <style>
+            body { font-family: system-ui, -apple-system, sans-serif; padding: 24px; color: #111; line-height: 1.5; }
+            h2 { margin-top: 0; margin-bottom: 4px; color: #09090B; }
+            .sub { color: #666; font-size: 13px; margin-bottom: 16px; }
+            .summary-box { display: flex; gap: 16px; background: #f4f4f5; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; font-size: 13px; }
+            .summary-box div { flex: 1; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
+            th, td { border: 1px solid #e4e4e7; padding: 8px 10px; text-align: left; }
+            th { background: #18181b; color: #ffffff; font-weight: 700; }
+            tr:nth-child(even) { background: #fafafa; }
+          </style>
+        </head>
+        <body>
+          <h2>NOVA POS — Cash Drawer Daily Audit Log Report</h2>
+          <div class="sub">Filter Period: <strong>${dateLabel}</strong> • Generated on ${new Date().toLocaleString()}</div>
+          <div class="summary-box">
+            <div><strong>Total Logs:</strong> ${auditLogMetrics.count}</div>
+            <div><strong>Opening Float:</strong> LKR ${auditLogMetrics.totalFloat.toFixed(2)}</div>
+            <div><strong>Paid In (+):</strong> LKR ${auditLogMetrics.totalPaidIn.toFixed(2)}</div>
+            <div><strong>Paid Out (-):</strong> LKR ${auditLogMetrics.totalPaidOut.toFixed(2)}</div>
+            <div><strong>Cash Sales (+):</strong> LKR ${auditLogMetrics.totalCashSales.toFixed(2)}</div>
+            <div><strong>Net Flow:</strong> LKR ${auditLogMetrics.netDrawerFlow.toFixed(2)}</div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Date & Time</th>
+                <th>Event Type</th>
+                <th>Cashier / Terminal</th>
+                <th>Description / Reason</th>
+                <th style="text-align:right">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml || '<tr><td colspan="5" style="text-align:center">No audit log records for this filter period.</td></tr>'}
+            </tbody>
+          </table>
+          <p style="text-align:center; margin-top:30px; font-size:11px; color:#888;">*** END OF AUDIT LOG REPORT ***</p>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+  };
 
   const sessionSales = useMemo(() => {
     if (!activeSession) return [];
@@ -319,7 +541,7 @@ const PosSystem: React.FC = () => {
     }
   };
 
-  const handleStartShift = (e: React.FormEvent) => {
+  const handleStartShift = async (e: React.FormEvent) => {
     e.preventDefault();
     const openingAmt = Number(openingCashInput) || 0;
 
@@ -330,6 +552,8 @@ const PosSystem: React.FC = () => {
       amount: openingAmt,
       reason: openingNotesInput || 'Initial Opening Float Added to Drawer',
       cashierName: cashierName || 'Cashier',
+      registerNo: shiftRegisterNo,
+      shiftCode: shiftCode,
     };
 
     const newSession: RegisterSession = {
@@ -347,13 +571,24 @@ const PosSystem: React.FC = () => {
     };
 
     setActiveSession(newSession);
-    saveActiveSession(newSession);
+    await saveActiveSession(newSession);
+    try {
+      await offlineAddCashTransaction({
+        type: 'Float Open',
+        amount: openingAmt,
+        note: openingNotesInput || 'Initial Opening Float Added to Drawer',
+        user_name: cashierName || 'Cashier',
+        created_at: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error('Failed to log Float Open to DB:', err);
+    }
     setShowStartSessionModal(false);
     handleKickDrawer();
     setLastAction(`Shift started with LKR ${openingAmt} cash drawer float`);
   };
 
-  const handleDrawerPaidInOut = (e: React.FormEvent) => {
+  const handleDrawerPaidInOut = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeSession) return;
     const amount = Number(cashDrawerActionAmount) || 0;
@@ -371,7 +606,20 @@ const PosSystem: React.FC = () => {
         amount,
         reason: cashDrawerActionReason || 'Paid In Cash Float',
         cashierName: cashierName || 'Cashier',
+        registerNo: activeSession.registerNo,
+        shiftCode: activeSession.shiftCode,
       });
+      try {
+        await offlineAddCashTransaction({
+          type: 'Cash In',
+          amount,
+          note: cashDrawerActionReason || 'Paid In Cash Float',
+          user_name: cashierName || 'Cashier',
+          created_at: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.error('Failed to log Cash In to DB:', err);
+      }
       setLastAction(`Paid In LKR ${amount} to cash drawer (${cashDrawerActionReason})`);
     } else if (cashDrawerActionType === 'paid_out') {
       nextSession.paidOut = (nextSession.paidOut || 0) + amount;
@@ -382,13 +630,26 @@ const PosSystem: React.FC = () => {
         amount,
         reason: cashDrawerActionReason || 'Paid Out Cash Expense',
         cashierName: cashierName || 'Cashier',
+        registerNo: activeSession.registerNo,
+        shiftCode: activeSession.shiftCode,
       });
+      try {
+        await offlineAddCashTransaction({
+          type: 'Cash Out',
+          amount,
+          note: cashDrawerActionReason || 'Paid Out Cash Expense',
+          user_name: cashierName || 'Cashier',
+          created_at: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.error('Failed to log Cash Out to DB:', err);
+      }
       setLastAction(`Paid Out LKR ${amount} from cash drawer (${cashDrawerActionReason})`);
     }
 
     nextSession.cashLogs = logs;
     setActiveSession(nextSession);
-    saveActiveSession(nextSession);
+    await saveActiveSession(nextSession);
     handleKickDrawer();
     setCashDrawerActionType('none');
     setCashDrawerActionAmount('');
@@ -445,7 +706,7 @@ const PosSystem: React.FC = () => {
     zReportWindow.print();
   };
 
-  const handleCloseShift = (e: React.FormEvent) => {
+  const handleCloseShift = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeSession) return;
 
@@ -457,6 +718,8 @@ const PosSystem: React.FC = () => {
       amount: actualCashCount,
       reason: `Shift Closed. Expected: LKR ${expectedCashInDrawer}, Actual: LKR ${actualCashCount}, Discrepancy: LKR ${actualCashCount - expectedCashInDrawer}`,
       cashierName: cashierName || 'Cashier',
+      registerNo: activeSession.registerNo,
+      shiftCode: activeSession.shiftCode,
     };
 
     const closedSession: RegisterSession = {
@@ -467,14 +730,31 @@ const PosSystem: React.FC = () => {
       cashLogs: [finalLog, ...(activeSession.cashLogs || [])],
     };
 
+    let nextHistory: RegisterSession[] = [];
     try {
-      const historyRaw = localStorage.getItem(LOCAL_SHIFT_HISTORY_KEY);
-      const history = historyRaw ? (JSON.parse(historyRaw) as RegisterSession[]) : [];
+      const history = await offlineGetShiftHistory();
       history.unshift(closedSession);
-      localStorage.setItem(LOCAL_SHIFT_HISTORY_KEY, JSON.stringify(history.slice(0, 50)));
-    } catch {}
+      nextHistory = history.slice(0, 50);
+      await offlineSaveShiftHistory(nextHistory);
+      setShiftHistory(nextHistory);
+    } catch {
+      nextHistory = [closedSession, ...shiftHistory].slice(0, 50);
+      setShiftHistory(nextHistory);
+    }
 
-    saveActiveSession(null);
+    try {
+      await offlineAddCashTransaction({
+        type: 'Float Close',
+        amount: actualCashCount,
+        note: `Shift Closed. Expected: LKR ${expectedCashInDrawer}, Actual: LKR ${actualCashCount}`,
+        user_name: cashierName || 'Cashier',
+        created_at: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error('Failed to log Float Close to DB:', err);
+    }
+
+    await saveActiveSession(null);
     setActiveSession(null);
     setShowDrawerDetailsModal(false);
     setCashDrawerActionType('none');
@@ -483,7 +763,27 @@ const PosSystem: React.FC = () => {
     setShowDenomCounter(false);
     setLastAction(`Shift closed. Actual cash in drawer: LKR ${actualCashCount}`);
     setShowStartSessionModal(true);
+    navigate('/dashboard');
   };
+
+  useEffect(() => {
+    const syncActiveSessionFromDb = async () => {
+      try {
+        const dbSession = await offlineGetActiveRegisterSession();
+        if (dbSession && dbSession.status === 'open') {
+          setActiveSession(dbSession);
+          setShowStartSessionModal(false);
+        }
+        const dbHistory = await offlineGetShiftHistory();
+        if (dbHistory && dbHistory.length > 0) {
+          setShiftHistory(dbHistory);
+        }
+      } catch (e) {
+        console.error('Failed to sync active session from IndexedDB:', e);
+      }
+    };
+    syncActiveSessionFromDb();
+  }, []);
 
   useEffect(() => {
     if (weightedProduct) {
@@ -637,10 +937,6 @@ const PosSystem: React.FC = () => {
   const isLightMode = theme === 'light';
   const themed = (style: React.CSSProperties, lightStyle: React.CSSProperties = {}) =>
     isLightMode ? { ...style, ...lightStyle } : style;
-  const loggedInUser = useMemo(() => getStoredUser(), []);
-  const cashierId = Number(loggedInUser.id);
-  const cashierName = loggedInUser.name ?? loggedInUser.username ?? 'Current cashier';
-  const cashierRole = getStoredUserRole(loggedInUser);
   const canViewAllSales = cashierRole.toLowerCase().includes('super admin');
   const visibleCompletedSales = canViewAllSales
     ? completedSales
@@ -1119,6 +1415,8 @@ ${450 + streamLength}
           amount: netCash,
           reason: `Sale ${payload.sale_no} (${payload.payment_method}${payload.payment_method === 'Credit' ? ' down-payment' : ''})`,
           cashierName: payload.cashier_name || cashierName || 'Cashier',
+          registerNo: activeSession.registerNo,
+          shiftCode: activeSession.shiftCode,
         };
         const updatedSession: RegisterSession = {
           ...activeSession,
@@ -3347,7 +3645,7 @@ ${450 + streamLength}
         </div>
       )}
 
-      {showDrawerDetailsModal && activeSession && (
+      {showDrawerDetailsModal && (
         <div
           style={{
             position: 'fixed',
@@ -3366,7 +3664,7 @@ ${450 + streamLength}
         >
           <div
             style={{
-              width: 960,
+              width: 1040,
               maxWidth: 'calc(100vw - 32px)',
               maxHeight: 'calc(100vh - 32px)',
               overflowY: 'auto',
@@ -3405,12 +3703,18 @@ ${450 + streamLength}
                     <h3 style={{ fontSize: 18, fontWeight: 800, color: isLightMode ? '#09090B' : '#FAFAFA', margin: 0 }}>
                       Cash Drawer & Shift Dashboard
                     </h3>
-                    <span style={{ fontSize: 11, fontWeight: 800, background: isLightMode ? '#F4F4F5' : '#27272A', color: '#22C55E', padding: '2px 8px', borderRadius: 12, border: isLightMode ? '1px solid #E4E4E7' : '1px solid #3F3F46' }}>
-                      🟢 SHIFT ACTIVE
-                    </span>
+                    {activeSession ? (
+                      <span style={{ fontSize: 11, fontWeight: 800, background: isLightMode ? '#F4F4F5' : '#27272A', color: '#22C55E', padding: '2px 8px', borderRadius: 12, border: isLightMode ? '1px solid #E4E4E7' : '1px solid #3F3F46' }}>
+                        🟢 SHIFT ACTIVE
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 11, fontWeight: 800, background: isLightMode ? '#F4F4F5' : '#27272A', color: '#EF4444', padding: '2px 8px', borderRadius: 12, border: isLightMode ? '1px solid #E4E4E7' : '1px solid #3F3F46' }}>
+                        🔴 NO ACTIVE SHIFT
+                      </span>
+                    )}
                   </div>
                   <p style={{ fontSize: 12, color: isLightMode ? '#71717A' : '#A1A1AA', marginTop: 2, margin: 0 }}>
-                    Cashier: <strong>{activeSession.cashierName}</strong> • Terminal: <strong>{activeSession.registerNo}</strong> ({activeSession.shiftCode})
+                    Cashier: <strong>{activeSession?.cashierName || cashierName || 'Cashier'}</strong> • Terminal: <strong>{activeSession?.registerNo || 'Register 01'}</strong> ({activeSession?.shiftCode || 'Shift A'})
                   </p>
                 </div>
               </div>
@@ -3628,53 +3932,374 @@ ${450 + streamLength}
               {/* RIGHT COLUMN: Live Audit Logs / Paid In-Out Form / Close Shift Reconcile Panel */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {(cashDrawerActionType === 'none' || cashDrawerActionType === 'cash_log') && (
-                  <div style={{ padding: 14, borderRadius: 8, border: isLightMode ? '1px solid #E4E4E7' : '1px solid #3F3F46', background: isLightMode ? '#F4F4F5' : '#27272A', display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 370, minHeight: 300 }}>
+                  <div
+                    style={{
+                      padding: 14,
+                      borderRadius: 10,
+                      border: isLightMode ? '1px solid #E4E4E7' : '1px solid #3F3F46',
+                      background: isLightMode ? '#F4F4F5' : '#27272A',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 12,
+                      maxHeight: 520,
+                      minHeight: 400,
+                    }}
+                  >
+                    {/* Header */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: 13, fontWeight: 800, color: isLightMode ? '#09090B' : '#FAFAFA' }}>
-                        📥 Cash Drawer Audit Log History
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 14, fontWeight: 800, color: isLightMode ? '#09090B' : '#FAFAFA' }}>
+                          📥 Cash Drawer Daily Audit Log History
+                        </span>
+                        <span
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 800,
+                            background: isLightMode ? '#09090B' : '#FFFFFF',
+                            color: isLightMode ? '#FFFFFF' : '#000000',
+                            padding: '2px 8px',
+                            borderRadius: 12,
+                          }}
+                        >
+                          {auditLogMetrics.count} {auditLogMetrics.count === 1 ? 'Entry' : 'Entries'}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <button
+                          type="button"
+                          style={{
+                            padding: '4px 10px',
+                            borderRadius: 6,
+                            border: isLightMode ? '1px solid #E4E4E7' : '1px solid #3F3F46',
+                            background: isLightMode ? '#ffffff' : '#09090B',
+                            color: isLightMode ? '#09090B' : '#FAFAFA',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                          }}
+                          onClick={handlePrintDailyAuditLog}
+                          title="Print / Export Daily Cash Drawer Audit Log Report"
+                        >
+                          <i className="ti ti-printer" aria-hidden="true" /> Print Report
+                        </button>
+                        {cashDrawerActionType === 'cash_log' && (
+                          <button
+                            type="button"
+                            style={{
+                              padding: '4px 10px',
+                              borderRadius: 6,
+                              border: isLightMode ? '1px solid #E4E4E7' : '1px solid #3F3F46',
+                              background: isLightMode ? '#ffffff' : '#09090B',
+                              color: isLightMode ? '#09090B' : '#FAFAFA',
+                              fontSize: 11,
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                            }}
+                            onClick={() => setCashDrawerActionType('none')}
+                          >
+                            Back
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Quick Date Selector Tabs & Custom Picker */}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 800,
+                          color: isLightMode ? '#71717A' : '#A1A1AA',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.04em',
+                        }}
+                      >
+                        Date Period:
                       </span>
-                      {cashDrawerActionType === 'cash_log' && (
-                        <button type="button" style={{ padding: '3px 8px', borderRadius: 6, border: isLightMode ? '1px solid #E4E4E7' : '1px solid #3F3F46', background: isLightMode ? '#ffffff' : '#09090B', color: isLightMode ? '#09090B' : '#FAFAFA', fontSize: 11, fontWeight: 700, cursor: 'pointer' }} onClick={() => setCashDrawerActionType('none')}>Back</button>
+                      {(['today', 'custom'] as const).map((filterOpt) => {
+                        const labels = {
+                          today: '📅 Today',
+                          custom: '📆 Pick Date',
+                        };
+                        const isActive = auditLogDateFilter === filterOpt;
+                        return (
+                          <button
+                            key={filterOpt}
+                            type="button"
+                            style={{
+                              padding: '3px 10px',
+                              borderRadius: 6,
+                              border: isActive ? 'none' : isLightMode ? '1px solid #E4E4E7' : '1px solid #3F3F46',
+                              background: isActive ? (isLightMode ? '#09090B' : '#FFFFFF') : isLightMode ? '#ffffff' : '#18181B',
+                              color: isActive ? (isLightMode ? '#FFFFFF' : '#000000') : isLightMode ? '#09090B' : '#FAFAFA',
+                              fontSize: 11,
+                              fontWeight: isActive ? 800 : 600,
+                              cursor: 'pointer',
+                            }}
+                            onClick={() => setAuditLogDateFilter(filterOpt)}
+                          >
+                            {labels[filterOpt]}
+                          </button>
+                        );
+                      })}
+
+                      {auditLogDateFilter === 'custom' && (
+                        <input
+                          type="date"
+                          style={{
+                            padding: '2px 6px',
+                            borderRadius: 6,
+                            border: isLightMode ? '1px solid #E4E4E7' : '1px solid #3F3F46',
+                            background: isLightMode ? '#ffffff' : '#09090B',
+                            color: isLightMode ? '#09090B' : '#FAFAFA',
+                            fontSize: 11,
+                            fontWeight: 700,
+                          }}
+                          value={auditLogCustomDate}
+                          onChange={(e) => setAuditLogCustomDate(e.target.value)}
+                        />
                       )}
                     </div>
-                    {!activeSession.cashLogs || activeSession.cashLogs.length === 0 ? (
-                      <div style={{ fontSize: 13, color: isLightMode ? '#71717A' : '#A1A1AA', padding: '20px 0', textAlign: 'center' }}>
-                        No drawer log entries recorded for this session.
-                      </div>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, overflowY: 'auto', paddingRight: 4 }}>
-                        {activeSession.cashLogs.map((log) => (
-                          <div
-                            key={log.id}
+
+                    {/* Search & Type Filter Bar */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px', gap: 6 }}>
+                      <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                        <i
+                          className="ti ti-search"
+                          style={{
+                            position: 'absolute',
+                            left: 8,
+                            fontSize: 13,
+                            color: isLightMode ? '#71717A' : '#A1A1AA',
+                          }}
+                        />
+                        <input
+                          type="text"
+                          placeholder="Search logs (reason, cashier, amount...)"
+                          style={{
+                            width: '100%',
+                            padding: '6px 8px 6px 26px',
+                            borderRadius: 6,
+                            border: isLightMode ? '1px solid #E4E4E7' : '1px solid #3F3F46',
+                            background: isLightMode ? '#ffffff' : '#18181B',
+                            color: isLightMode ? '#09090B' : '#FAFAFA',
+                            fontSize: 11,
+                            fontWeight: 500,
+                          }}
+                          value={auditLogSearchQuery}
+                          onChange={(e) => setAuditLogSearchQuery(e.target.value)}
+                        />
+                        {auditLogSearchQuery && (
+                          <button
+                            type="button"
                             style={{
-                              padding: '8px 10px',
-                              borderRadius: 6,
-                              background: isLightMode ? '#ffffff' : '#09090B',
-                              border: isLightMode ? '1px solid #E4E4E7' : '1px solid #3F3F46',
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
+                              position: 'absolute',
+                              right: 6,
+                              background: 'none',
+                              border: 'none',
+                              color: isLightMode ? '#71717A' : '#A1A1AA',
+                              cursor: 'pointer',
                               fontSize: 12,
                             }}
+                            onClick={() => setAuditLogSearchQuery('')}
                           >
-                            <div>
-                              <div style={{ fontWeight: 700, color: isLightMode ? '#09090B' : '#FAFAFA' }}>
-                                {log.type === 'opening_float' && '📥 Opening Cash Float'}
-                                {log.type === 'paid_in' && '➕ Paid In (Cash Refill)'}
-                                {log.type === 'paid_out' && '➖ Paid Out (Expense)'}
-                                {log.type === 'cash_sale' && '💵 Cash Sale Collected'}
-                                {log.type === 'close_shift' && '🔒 Shift Closed'}
-                                <span style={{ fontSize: 11, fontWeight: 400, color: isLightMode ? '#71717A' : '#A1A1AA', marginLeft: 8 }}>
-                                  {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                </span>
+                            ×
+                          </button>
+                        )}
+                      </div>
+
+                      <select
+                        style={{
+                          padding: '6px 8px',
+                          borderRadius: 6,
+                          border: isLightMode ? '1px solid #E4E4E7' : '1px solid #3F3F46',
+                          background: isLightMode ? '#ffffff' : '#18181B',
+                          color: isLightMode ? '#09090B' : '#FAFAFA',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                        value={auditLogTypeFilter}
+                        onChange={(e) => setAuditLogTypeFilter(e.target.value as any)}
+                      >
+                        <option value="all">All Event Types</option>
+                        <option value="opening_float">📥 Opening Float</option>
+                        <option value="paid_in">➕ Paid In</option>
+                        <option value="paid_out">➖ Paid Out</option>
+                        <option value="cash_sale">💵 Cash Sales</option>
+                        <option value="close_shift">🔒 Shift Closed</option>
+                      </select>
+                    </div>
+
+                    {/* Daily Metrics Summary Bar */}
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(4, 1fr)',
+                        gap: 6,
+                        background: isLightMode ? '#ffffff' : '#18181B',
+                        padding: 8,
+                        borderRadius: 6,
+                        border: isLightMode ? '1px solid #E4E4E7' : '1px solid #3F3F46',
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: isLightMode ? '#71717A' : '#A1A1AA', textTransform: 'uppercase' }}>Opening Float</div>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: isLightMode ? '#09090B' : '#FAFAFA' }}>{formatMoney(auditLogMetrics.totalFloat)}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: '#22C55E', textTransform: 'uppercase' }}>Inflow (Paid In + Sales)</div>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: '#22C55E' }}>+{formatMoney(auditLogMetrics.totalPaidIn + auditLogMetrics.totalCashSales)}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: '#EF4444', textTransform: 'uppercase' }}>Outflow (Paid Out)</div>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: '#EF4444' }}>-{formatMoney(auditLogMetrics.totalPaidOut)}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: isLightMode ? '#09090B' : '#FAFAFA', textTransform: 'uppercase' }}>Net Day Flow</div>
+                        <div style={{ fontSize: 12, fontWeight: 900, color: auditLogMetrics.netDrawerFlow >= 0 ? '#22C55E' : '#EF4444' }}>
+                          {formatMoney(auditLogMetrics.netDrawerFlow)}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Audit Log Entries List */}
+                    {filteredAuditLogs.length === 0 ? (
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: isLightMode ? '#71717A' : '#A1A1AA',
+                          padding: '30px 0',
+                          textAlign: 'center',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: 8,
+                        }}
+                      >
+                        <i className="ti ti-receipt-off" style={{ fontSize: 24, opacity: 0.5 }} />
+                        <span>No audit log entries recorded for this filter selection.</span>
+                        {(auditLogSearchQuery || auditLogTypeFilter !== 'all' || auditLogDateFilter !== 'today') && (
+                          <button
+                            type="button"
+                            style={{
+                              padding: '4px 10px',
+                              borderRadius: 4,
+                              border: 'none',
+                              background: isLightMode ? '#09090B' : '#FFFFFF',
+                              color: isLightMode ? '#FFFFFF' : '#000000',
+                              fontSize: 11,
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                            }}
+                            onClick={() => {
+                              setAuditLogSearchQuery('');
+                              setAuditLogTypeFilter('all');
+                              setAuditLogDateFilter('today');
+                            }}
+                          >
+                            Reset Filters
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, overflowY: 'auto', paddingRight: 4, maxHeight: 260 }}>
+                        {filteredAuditLogs.map((log) => {
+                          const logDateObj = new Date(log.timestamp);
+                          const formattedDate = logDateObj.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+                          const formattedTime = logDateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+                          return (
+                            <div
+                              key={log.id}
+                              style={{
+                                padding: '8px 10px',
+                                borderRadius: 6,
+                                background: isLightMode ? '#ffffff' : '#09090B',
+                                border: isLightMode ? '1px solid #E4E4E7' : '1px solid #3F3F46',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                fontSize: 12,
+                              }}
+                            >
+                              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                <div
+                                  style={{
+                                    width: 32,
+                                    height: 32,
+                                    borderRadius: 6,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: 14,
+                                    flexShrink: 0,
+                                    background:
+                                      log.type === 'opening_float'
+                                        ? 'rgba(59, 130, 246, 0.15)'
+                                        : log.type === 'paid_in'
+                                        ? 'rgba(34, 197, 94, 0.15)'
+                                        : log.type === 'paid_out'
+                                        ? 'rgba(239, 68, 68, 0.15)'
+                                        : log.type === 'cash_sale'
+                                        ? 'rgba(16, 185, 129, 0.15)'
+                                        : 'rgba(168, 85, 247, 0.15)',
+                                    color:
+                                      log.type === 'opening_float'
+                                        ? '#3B82F6'
+                                        : log.type === 'paid_in'
+                                        ? '#22C55E'
+                                        : log.type === 'paid_out'
+                                        ? '#EF4444'
+                                        : log.type === 'cash_sale'
+                                        ? '#10B981'
+                                        : '#A855F7',
+                                  }}
+                                >
+                                  <i
+                                    className={
+                                      log.type === 'opening_float'
+                                        ? 'ti ti-inbox'
+                                        : log.type === 'paid_in'
+                                        ? 'ti ti-circle-plus'
+                                        : log.type === 'paid_out'
+                                        ? 'ti ti-circle-minus'
+                                        : log.type === 'cash_sale'
+                                        ? 'ti ti-cash'
+                                        : 'ti ti-lock'
+                                    }
+                                  />
+                                </div>
+
+                                <div>
+                                  <div style={{ fontWeight: 700, color: isLightMode ? '#09090B' : '#FAFAFA', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <span>
+                                      {log.type === 'opening_float' && 'Opening Cash Float'}
+                                      {log.type === 'paid_in' && 'Paid In (Cash Refill)'}
+                                      {log.type === 'paid_out' && 'Paid Out (Expense)'}
+                                      {log.type === 'cash_sale' && 'Cash Sale Collected'}
+                                      {log.type === 'close_shift' && 'Shift Closed'}
+                                    </span>
+                                    <span style={{ fontSize: 10, fontWeight: 500, color: isLightMode ? '#71717A' : '#A1A1AA' }}>
+                                      {auditLogDateFilter === 'custom' ? `${formattedDate} ${formattedTime}` : formattedTime}
+                                    </span>
+                                  </div>
+                                  <div style={{ fontSize: 11, color: isLightMode ? '#71717A' : '#A1A1AA', marginTop: 1 }}>
+                                    {log.reason || 'Cash Drawer Action'}
+                                    <span style={{ marginLeft: 6, fontWeight: 600 }}>• {log.cashierName || 'Cashier'} {log.registerNo ? `(${log.registerNo})` : ''}</span>
+                                  </div>
+                                </div>
                               </div>
-                              {log.reason && <div style={{ fontSize: 11, color: isLightMode ? '#71717A' : '#A1A1AA', marginTop: 2 }}>{log.reason}</div>}
+
+                              <div style={{ fontWeight: 800, fontSize: 13, textAlign: 'right', flexShrink: 0, color: log.type === 'paid_out' ? '#EF4444' : '#22C55E' }}>
+                                {log.type === 'paid_out' ? '-' : '+'}{formatMoney(log.amount)}
+                              </div>
                             </div>
-                            <div style={{ fontWeight: 800, fontSize: 13, color: log.type === 'paid_out' ? '#EF4444' : '#22C55E' }}>
-                              {log.type === 'paid_out' ? '-' : '+'}{formatMoney(log.amount)}
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
