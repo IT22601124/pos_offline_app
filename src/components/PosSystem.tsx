@@ -1298,12 +1298,15 @@ ${450 + streamLength}
   function updateQuantity(productId: number, quantity: number) {
     setCart((previous) =>
       previous
-        .map((item) =>
-          item.id === productId
-            ? { ...item, quantity: Math.min(Math.max(quantity, 1), item.stock) }
-            : item,
-        )
-        .filter((item) => item.quantity > 0),
+        .map((item) => {
+          if (item.id !== productId) return item;
+          let newQty = quantity;
+          if (newQty > 0 && item.stock > 0) {
+            newQty = Math.min(newQty, item.stock);
+          }
+          return { ...item, quantity: newQty };
+        })
+        .filter((item) => item.quantity !== 0),
     );
   }
 
@@ -1847,12 +1850,15 @@ ${450 + streamLength}
                           </button>
                           <input
                             type="number"
-                            min={1}
                             style={themed(styles.rowQtyInput, styles.inputLight)}
                             value={item.quantity}
                             onChange={(e) => {
-                              const val = Math.max(1, Number(e.target.value) || 1);
-                              updateQuantity(item.id, val);
+                              const rawVal = e.target.value;
+                              if (rawVal === '') return;
+                              const val = Number(rawVal);
+                              if (!isNaN(val)) {
+                                updateQuantity(item.id, val);
+                              }
                             }}
                           />
                           <button
