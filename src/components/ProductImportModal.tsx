@@ -3,11 +3,13 @@ import {
   createBrand,
   createCategory,
   createProduct,
+  createSupplier,
   createUnit,
   type CreateProductPayload,
   type PosBrand,
   type PosCategory,
   type PosProduct,
+  type PosSupplier,
   type PosUnit,
 } from '../hooks/pos/pos_controller';
 
@@ -15,12 +17,14 @@ interface ProductImportModalProps {
   categories: PosCategory[];
   brands: PosBrand[];
   units: PosUnit[];
+  suppliers?: PosSupplier[];
   onClose: () => void;
   onImported: (
     products: PosProduct[],
     createdCategories?: PosCategory[],
     createdBrands?: PosBrand[],
     createdUnits?: PosUnit[],
+    createdSuppliers?: PosSupplier[],
   ) => void;
 }
 
@@ -31,9 +35,11 @@ interface ImportRow {
   rawCategoryName: string;
   rawBrandName: string;
   rawUnitName: string;
+  rawSupplierName: string;
   isNewCategory: boolean;
   isNewBrand: boolean;
   isNewUnit: boolean;
+  isNewSupplier: boolean;
   errors: string[];
 }
 
@@ -45,6 +51,7 @@ const SAMPLE_HEADERS = [
   'category',
   'brand',
   'unit',
+  'supplier',
   'cost_price',
   'selling_price',
   'wholesale_price',
@@ -156,10 +163,12 @@ const buildImportRowsFromMatrix = (
   categories: PosCategory[] = [],
   brands: PosBrand[] = [],
   units: PosUnit[] = [],
+  suppliers: PosSupplier[] = [],
 ): ImportRow[] => {
   const safeCategories = Array.isArray(categories) ? categories : [];
   const safeBrands = Array.isArray(brands) ? brands : [];
   const safeUnits = Array.isArray(units) ? units : [];
+  const safeSuppliers = Array.isArray(suppliers) ? suppliers : [];
 
   if (!Array.isArray(matrix) || !matrix.length) return [];
   const [headerRow, ...bodyRows] = matrix;
@@ -189,18 +198,22 @@ const buildImportRowsFromMatrix = (
       const rawCategoryName = getValue(source, ['category', 'category_name', 'cat', 'category_id']);
       const rawBrandName = getValue(source, ['brand', 'brand_name', 'make', 'manufacturer', 'brand_id']);
       const rawUnitName = getValue(source, ['unit', 'unit_name', 'uom', 'unit_of_measure', 'unit_id']);
+      const rawSupplierName = getValue(source, ['supplier', 'supplier_name', 'vendor', 'supplier_id']);
 
       const category = findByName(safeCategories, rawCategoryName);
       const brand = findByName(safeBrands, rawBrandName);
       const unit = findByName(safeUnits, rawUnitName);
+      const supplier = findByName(safeSuppliers, rawSupplierName);
 
       const isNewCategory = Boolean(rawCategoryName) && !category && !Number(rawCategoryName);
       const isNewBrand = Boolean(rawBrandName) && !brand && !Number(rawBrandName);
       const isNewUnit = Boolean(rawUnitName) && !unit && !Number(rawUnitName);
+      const isNewSupplier = Boolean(rawSupplierName) && !supplier && !Number(rawSupplierName);
 
       const categoryId = Number(rawCategoryName) || category?.id || safeCategories[0]?.id || 1;
       const brandId = Number(rawBrandName) || brand?.id || safeBrands[0]?.id || 1;
       const unitId = Number(rawUnitName) || unit?.id || safeUnits[0]?.id || 1;
+      const supplierId = Number(rawSupplierName) || supplier?.id || safeSuppliers[0]?.id || 1;
 
       const sellingPrice = toNumber(
         getValue(source, ['selling_price', 'price', 'sell_price', 'sale_price', 'retail_price']),
@@ -239,9 +252,11 @@ const buildImportRowsFromMatrix = (
         rawCategoryName,
         rawBrandName,
         rawUnitName,
+        rawSupplierName,
         isNewCategory,
         isNewBrand,
         isNewUnit,
+        isNewSupplier,
         payload: {
           product_code: productCode,
           barcode,
@@ -250,6 +265,7 @@ const buildImportRowsFromMatrix = (
           category_id: categoryId,
           brand_id: brandId,
           unit_id: unitId,
+          supplier_id: supplierId,
           cost_price: costPrice,
           selling_price: sellingPrice,
           wholesale_price: wholesalePrice,
@@ -281,6 +297,7 @@ const ProductImportModal: React.FC<ProductImportModalProps> = ({
   categories,
   brands,
   units,
+  suppliers = [],
   onClose,
   onImported,
 }) => {
@@ -320,6 +337,9 @@ const ProductImportModal: React.FC<ProductImportModalProps> = ({
   );
   const newUnitNames = Array.from(
     new Set(validRows.filter((r) => r.isNewUnit).map((r) => r.rawUnitName)),
+  );
+  const newSupplierNames = Array.from(
+    new Set(validRows.filter((r) => r.isNewSupplier).map((r) => r.rawSupplierName)),
   );
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -369,7 +389,7 @@ const ProductImportModal: React.FC<ProductImportModalProps> = ({
       setProgressLabel('Validating & building import rows... 90%');
       await new Promise((r) => setTimeout(r, 60));
 
-      const parsedRows = buildImportRowsFromMatrix(matrix, categories, brands, units);
+      const parsedRows = buildImportRowsFromMatrix(matrix, categories, brands, units, suppliers);
       setRows(parsedRows);
 
       setProgressPercent(100);
@@ -385,7 +405,7 @@ const ProductImportModal: React.FC<ProductImportModalProps> = ({
         try {
           const csvContent = await file.text();
           matrix = parseCsv(csvContent);
-          const parsedRows = buildImportRowsFromMatrix(matrix, categories, brands, units);
+          const parsedRows = buildImportRowsFromMatrix(matrix, categories, brands, units, suppliers);
           setRows(parsedRows);
           setMessage(parsedRows.length ? '' : 'No product rows found in this file.');
         } catch (fallbackErr) {
@@ -403,8 +423,8 @@ const ProductImportModal: React.FC<ProductImportModalProps> = ({
 
   const handleDownloadTemplate = () => {
     const csvHeader = SAMPLE_HEADERS.join(',');
-    const sampleRow1 = 'P001,123456789,Coca Cola 1L,Refreshing Cold Beverage,Beverages,Coca Cola,Bottle,250,350,330,20,5,8,0,,1.0,false,true';
-    const sampleRow2 = 'P002,987654321,Lays Potato Chips 50g,Crunchy salted chips,Snacks,Lays,Packet,100,150,140,50,10,0,0,,0.05,false,true';
+    const sampleRow1 = 'P001,123456789,Coca Cola 1L,Refreshing Cold Beverage,Beverages,Coca Cola,Bottle,ABC Traders,250,350,330,20,5,8,0,,1.0,false,true';
+    const sampleRow2 = 'P002,987654321,Lays Potato Chips 50g,Crunchy salted chips,Snacks,Lays,Packet,Global Foods,100,150,140,50,10,0,0,,0.05,false,true';
     const csvContent = '\uFEFF' + `${csvHeader}\n${sampleRow1}\n${sampleRow2}`;
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -430,6 +450,7 @@ const ProductImportModal: React.FC<ProductImportModalProps> = ({
     const safeCategories = Array.isArray(categories) ? categories : [];
     const safeBrands = Array.isArray(brands) ? brands : [];
     const safeUnits = Array.isArray(units) ? units : [];
+    const safeSuppliers = Array.isArray(suppliers) ? suppliers : [];
 
     const categoryMap = new Map<string, number>(
       safeCategories.filter((c) => c && c.name).map((c) => [String(c.name).toLowerCase(), c.id]),
@@ -440,12 +461,17 @@ const ProductImportModal: React.FC<ProductImportModalProps> = ({
     const unitMap = new Map<string, number>(
       safeUnits.filter((u) => u && u.name).map((u) => [String(u.name).toLowerCase(), u.id]),
     );
+    const supplierMap = new Map<string, number>(
+      safeSuppliers.filter((s) => s && s.name).map((s) => [String(s.name).toLowerCase(), s.id]),
+    );
 
     const createdCategoriesList: PosCategory[] = [];
     const createdBrandsList: PosBrand[] = [];
     const createdUnitsList: PosUnit[] = [];
+    const createdSuppliersList: PosSupplier[] = [];
 
-    const totalMasterItems = newCategoryNames.length + newBrandNames.length + newUnitNames.length;
+    const totalMasterItems =
+      newCategoryNames.length + newBrandNames.length + newUnitNames.length + newSupplierNames.length;
     const totalSteps = totalMasterItems + validRows.length;
     let completedSteps = 0;
 
@@ -499,6 +525,19 @@ const ProductImportModal: React.FC<ProductImportModalProps> = ({
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
 
+    // Auto-create missing suppliers
+    for (const supplierName of newSupplierNames) {
+      try {
+        const created = await createSupplier(supplierName);
+        supplierMap.set(supplierName.toLowerCase(), created.id);
+        createdSuppliersList.push(created);
+      } catch (err) {
+        console.warn(`Failed to auto-create supplier "${supplierName}":`, err);
+      }
+      await updateProgress(`Creating supplier "${supplierName}"...`);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
     const importedProducts: PosProduct[] = [];
     const failedRows: number[] = [];
 
@@ -514,12 +553,16 @@ const ProductImportModal: React.FC<ProductImportModalProps> = ({
         const finalUnitId =
           unitMap.get(row.rawUnitName.toLowerCase()) ||
           (Number(row.rawUnitName) || row.payload.unit_id);
+        const finalSupplierId =
+          supplierMap.get(row.rawSupplierName.toLowerCase()) ||
+          (Number(row.rawSupplierName) || row.payload.supplier_id);
 
         const finalPayload: CreateProductPayload = {
           ...row.payload,
           category_id: finalCategoryId,
           brand_id: finalBrandId,
           unit_id: finalUnitId,
+          supplier_id: finalSupplierId,
         };
 
         const product = await createProduct(finalPayload);
@@ -543,13 +586,15 @@ const ProductImportModal: React.FC<ProductImportModalProps> = ({
       importedProducts.length ||
       createdCategoriesList.length ||
       createdBrandsList.length ||
-      createdUnitsList.length
+      createdUnitsList.length ||
+      createdSuppliersList.length
     ) {
       onImported(
         importedProducts,
         createdCategoriesList,
         createdBrandsList,
         createdUnitsList,
+        createdSuppliersList,
       );
     }
 
@@ -557,6 +602,7 @@ const ProductImportModal: React.FC<ProductImportModalProps> = ({
     if (createdCategoriesList.length) createdSummary.push(`${createdCategoriesList.length} categories`);
     if (createdBrandsList.length) createdSummary.push(`${createdBrandsList.length} brands`);
     if (createdUnitsList.length) createdSummary.push(`${createdUnitsList.length} units`);
+    if (createdSuppliersList.length) createdSummary.push(`${createdSuppliersList.length} suppliers`);
 
     const masterMsg = createdSummary.length ? ` (Auto-created: ${createdSummary.join(', ')})` : '';
 
@@ -571,6 +617,7 @@ const ProductImportModal: React.FC<ProductImportModalProps> = ({
     newCategoryNames.length && `${newCategoryNames.length} Category(ies)`,
     newBrandNames.length && `${newBrandNames.length} Brand(s)`,
     newUnitNames.length && `${newUnitNames.length} Unit(s)`,
+    newSupplierNames.length && `${newSupplierNames.length} Supplier(s)`,
   ].filter(Boolean);
 
   return (
@@ -887,6 +934,7 @@ const ProductImportModal: React.FC<ProductImportModalProps> = ({
                   'Product',
                   'Category',
                   'Brand',
+                  'Supplier',
                   'Unit',
                   'Cost',
                   'Price',
@@ -917,6 +965,10 @@ const ProductImportModal: React.FC<ProductImportModalProps> = ({
                     {row.isNewBrand && <span style={styles.newBadge}>+New</span>}
                   </td>
                   <td style={styles.td}>
+                    {row.rawSupplierName || 'Default'}
+                    {row.isNewSupplier && <span style={styles.newBadge}>+New</span>}
+                  </td>
+                  <td style={styles.td}>
                     {row.rawUnitName || 'Default'}
                     {row.isNewUnit && <span style={styles.newBadge}>+New</span>}
                   </td>
@@ -938,7 +990,7 @@ const ProductImportModal: React.FC<ProductImportModalProps> = ({
               ))}
               {!rows.length && (
                 <tr>
-                  <td style={styles.emptyCell} colSpan={15}>
+                  <td style={styles.emptyCell} colSpan={16}>
                     Upload a CSV or Excel file to preview product rows
                   </td>
                 </tr>

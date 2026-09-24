@@ -4449,8 +4449,9 @@ const PosManagement: React.FC = () => {
           categories={categories}
           brands={brands}
           units={units}
+          suppliers={suppliers}
           onClose={() => setShowImportProducts(false)}
-          onImported={(importedProducts, createdCategories = [], createdBrands = [], createdUnits = []) => {
+          onImported={(importedProducts, createdCategories = [], createdBrands = [], createdUnits = [], createdSuppliers = []) => {
             if (createdCategories.length) {
               setCategories((previous) => {
                 const byId = new Map(previous.map((item) => [item.id, item]));
@@ -4471,6 +4472,14 @@ const PosManagement: React.FC = () => {
               setUnits((previous) => {
                 const byId = new Map(previous.map((item) => [item.id, item]));
                 createdUnits.forEach((item) => byId.set(item.id, item));
+                return Array.from(byId.values());
+              });
+            }
+
+            if (createdSuppliers.length) {
+              setSuppliers((previous) => {
+                const byId = new Map(previous.map((item) => [item.id, item]));
+                createdSuppliers.forEach((item) => byId.set(item.id, item));
                 return Array.from(byId.values());
               });
             }

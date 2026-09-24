@@ -5,6 +5,7 @@ import {
   offlineAddCategory,
   offlineAddCustomer,
   offlineAddProduct,
+  offlineAddSupplier,
   offlineAddUnit,
   offlineCreateSale,
   offlineDeleteProduct,
@@ -260,6 +261,17 @@ export const deleteCategory = async (categoryId: number): Promise<void> => {
 
 export const getAllSuppliers = async (): Promise<PosSupplier[]> => {
   return await offlineGetSuppliers();
+};
+
+export const createSupplier = async (name: string): Promise<PosSupplier> => {
+  return await offlineAddSupplier({
+    name: name.trim(),
+    contactPerson: '',
+    phone: '',
+    email: '',
+    address: '',
+    status: true,
+  });
 };
 
 export const getAllBrands = async (): Promise<PosBrand[]> => {
