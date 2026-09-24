@@ -1,0 +1,114 @@
+:root {
+  --app-bg: #16181d;
+  --app-surface: #202329;
+  --app-surface-soft: #252932;
+  --app-surface-muted: #2c313b;
+  --app-sidebar-bg: #1d2027;
+  --app-text: #f2f4f7;
+  --app-text-strong: #ffffff;
+  --app-muted: #a5adba;
+  --app-border: #353b46;
+  --app-border-soft: #2f3540;
+  --app-input-bg: #1b1e24;
+  --app-input-text: #f2f4f7;
+  --app-button-bg: #252932;
+  --app-button-text: #e4e7ec;
+  --app-accent: #32c862;
+  --app-accent-strong: #27ae4f;
+  --app-accent-soft: rgba(50, 200, 98, 0.14);
+  --app-danger: #ff8585;
+  --app-warning: #f7c457;
+  --app-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  font: 16px/145% var(--sans);
+  color: var(--app-text);
+  background: var(--app-bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+:root[data-theme='light'] {
+  --app-bg: #f4f6f8;
+  --app-surface: #ffffff;
+  --app-surface-soft: #f9fafb;
+  --app-surface-muted: #f2f4f7;
+  --app-sidebar-bg: #ffffff;
+  --app-text: #1f2937;
+  --app-text-strong: #101828;
+  --app-muted: #667085;
+  --app-border: #d9dee7;
+  --app-border-soft: #eaecf0;
+  --app-input-bg: #ffffff;
+  --app-input-text: #1f2937;
+  --app-button-bg: #ffffff;
+  --app-button-text: #344054;
+  --app-accent: #27ae4f;
+  --app-accent-strong: #16834f;
+  --app-accent-soft: #eaf7ef;
+  --app-danger: #b42318;
+  --app-warning: #946200;
+  --app-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+:root[data-theme='dark'] input::placeholder,
+:root[data-theme='dark'] textarea::placeholder {
+  color: #717d93 !important;
+  opacity: 1;
+}
+
+:root[data-theme='dark'] select option {
+  background-color: #1b1e24 !important;
+  color: #f2f4f7 !important;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--app-bg);
+  color: var(--app-text);
+  font-family: var(--sans);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+::placeholder {
+  color: color-mix(in srgb, var(--app-muted) 75%, transparent);
+}
+
+/* 100% Solid Black Table Header Columns */
+thead th,
+th {
+  background-color: #000000 !important;
+  background: #000000 !important;
+  opacity: 1 !important;
+  z-index: 10 !important;
+}
+
+/* Table Row Bottom Border Styling */
+tbody tr td {
+  border-bottom: 1px solid rgba(39, 174, 79, 0.25) !important;
+}

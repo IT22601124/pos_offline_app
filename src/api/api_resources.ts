@@ -1,0 +1,26 @@
+const API_RESOURCES = {
+    CHECK_CONNECTION : 'health',
+    LOGIN: "auth/login",
+    GET_ALL_USERS: "auth/users",
+    GET_ALL_ROLES: "roles",
+    GET_ALL_BRANCHES: "branches",
+    VERIFY_TOKEN: "/auth/verify-token",
+    CATEGORIES: "categories",
+    BRANDS: "brands",
+    UNITS: "units",
+    SUPPLIERS: "suppliers",
+    CUSTOMERS: "customers",
+    PRODUCTS: "products",
+    PRODUCT_SUPPLIERS: "product-suppliers",
+    STOCK_MOVEMENTS: "stock-movements",
+    PRODUCT_BATCHES: "product-batches",
+    PRODUCT_IMAGES: "product-images",
+    TAXES: "taxes",
+    DISCOUNTS: "discounts",
+    PRODUCT_VARIANTS: "product-variants",
+    POS_SALES: "pos-sales",
+    POS_SETTINGS: "pos-settings",
+    CUSTOMER_CREDIT_TRANSACTIONS: "customer-credit-transactions",
+}
+
+export default API_RESOURCES;
