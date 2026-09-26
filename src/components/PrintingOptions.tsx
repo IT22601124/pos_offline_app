@@ -181,7 +181,7 @@ export const PrintingOptions: React.FC<PrintingOptionsProps> = ({
   const paperWidth = settings.paperWidth; // mm
   const receiptPixelWidth = Math.min(Math.max(paperWidth * 3.8, 180), 340); // px preview width
   const fontSize = paperWidth <= 48 ? 10 : paperWidth <= 58 ? 11 : 13; // dynamic font size
-  const logoHeight = paperWidth <= 48 ? 32 : paperWidth <= 58 ? 44 : 60; // dynamic logo scaling
+  const logoHeight = paperWidth <= 48 ? 90 : paperWidth <= 58 ? 120 : 160; // dynamic logo scaling
   const maxLineLength = paperWidth <= 48 ? 24 : paperWidth <= 58 ? 32 : 44; // char line wrap capacity
 
   const storeName = storeProfile?.store_name || 'NOVA POS STORE';
@@ -189,8 +189,6 @@ export const PrintingOptions: React.FC<PrintingOptionsProps> = ({
     .filter(Boolean)
     .join(', ') || 'Main Street, Colombo';
   const storePhone = storeProfile?.phone || '0787450360';
-  const storeTaxNo = storeProfile?.tax_number || 'VAT-987654321';
-  const currency = storeProfile?.currency_code || 'LKR';
   const footerText = storeProfile?.receipt_footer || 'Thank you for shopping with us!';
 
   return (
@@ -590,81 +588,131 @@ export const PrintingOptions: React.FC<PrintingOptionsProps> = ({
                 <div style={styles.tearEdgeTop} />
 
                 {/* Header / Logo */}
-                {settings.printLogoOnReceipt && (
-                  <div style={styles.receiptHeader}>
-                    {storeProfile?.logo_url ? (
-                      <img
-                        src={storeProfile.logo_url}
-                        alt="Store Logo"
-                        style={{ ...styles.receiptLogoImg, height: logoHeight }}
-                      />
-                    ) : (
-                      <div style={{ ...styles.receiptLogoBox, height: logoHeight }}>
-                        <i className="ti ti-shopping-cart" aria-hidden="true" />
-                        <span>NOVA POS</span>
+                <div style={{ textAlign: 'center', marginBottom: 6, color: '#000' }}>
+                  {(storeProfile?.logo_url || storeProfile?.logo) ? (
+                    <img
+                      src={storeProfile.logo_url || storeProfile.logo}
+                      alt="Store Logo"
+                      style={{
+                        maxHeight: `${logoHeight}px`,
+                        maxWidth: '96%',
+                        objectFit: 'contain',
+                        margin: '0 auto 4px auto',
+                        display: 'block',
+                      }}
+                    />
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                      <svg width="36" height="22" viewBox="0 0 24 16" fill="#000" style={{ marginBottom: 2 }}>
+                        <path d="M2 14h20v2H2v-2zm1-2l2.5-7 4.5 4 4-7 4 7 4.5-4L21 12H3z" />
+                      </svg>
+                      <div
+                        style={{
+                          fontFamily: "'Playfair Display', Georgia, serif",
+                          fontSize: '1.6rem',
+                          fontWeight: '900',
+                          letterSpacing: '1px',
+                          lineHeight: 1,
+                          marginBottom: 2,
+                        }}
+                      >
+                        KP
                       </div>
-                    )}
+                    </div>
+                  )}
+                  <div style={{ fontFamily: "Georgia, serif", fontWeight: '700', fontSize: '1.1em' }}>
+                    {storeName || 'Kapilasiri Stores'}
                   </div>
-                )}
-
-                <div style={styles.receiptStoreInfo}>
-                  <div style={styles.receiptTitle}>{storeName}</div>
-                  <div>{storeAddress}</div>
-                  <div>Tel: {storePhone}</div>
-                  <div>Tax ID: {storeTaxNo}</div>
+                  <div style={{ fontSize: '0.65em', letterSpacing: '0.5px', textTransform: 'uppercase', margin: '1px 0 3px', fontStyle: 'italic', opacity: 0.85 }}>
+                    EVERYDAY ESSENTIALS, BETTER
+                  </div>
+                  <div style={{ fontSize: '0.85em', lineHeight: '1.2' }}>
+                    {storeAddress || 'NO-52,Front of Depot, Keppetipola.'}
+                  </div>
+                  <div style={{ fontSize: '0.85em', marginTop: 1 }}>
+                    Tel:- {storePhone || '0572281079/077-1576959'}
+                  </div>
                 </div>
 
                 <div style={styles.receiptDivider}>--------------------------------</div>
 
-                <div style={styles.receiptMeta}>
-                  <div>Order #: #INV-10948</div>
-                  <div>Date: {new Date().toLocaleDateString()} 14:32</div>
-                  <div>Cashier: Admin (Counter 1)</div>
+                <div style={{ fontSize: '0.85em', lineHeight: '1.35', textAlign: 'left' }}>
+                  <div>Date &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: 02-09-2026 / 02:07 PM</div>
+                  <div>Invoice No &nbsp;: KS-8073S2</div>
+                  <div>Customer &nbsp;&nbsp;&nbsp;: J.W WELIMADA</div>
+                  <div>Cashier &nbsp;&nbsp;&nbsp;&nbsp;: Banuka</div>
                 </div>
 
                 <div style={styles.receiptDivider}>--------------------------------</div>
 
-                {/* Items */}
-                <div style={styles.receiptItems}>
-                  <div style={styles.receiptItemRow}>
-                    <span style={styles.receiptItemName}>1x Espresso Double</span>
-                    <span style={styles.receiptItemPrice}>850.00</span>
+                {/* Table Header */}
+                <div style={{ fontSize: '0.78em', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span>S.N. Qty. Unit. MRP PRICE</span>
+                  <span>Amount(Rs.)</span>
+                </div>
+
+                {/* Sample Items */}
+                <div style={{ fontSize: '0.82em', textAlign: 'left' }}>
+                  <div style={{ marginBottom: 4 }}>
+                    <div style={{ fontWeight: 'bold' }}>1 වට්ටක්කා</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', opacity: 0.9 }}>
+                      <span>2.000 Kgs. 220.00 190.00</span>
+                      <span>380.00</span>
+                    </div>
                   </div>
-                  <div style={styles.receiptItemRow}>
-                    <span style={styles.receiptItemName}>2x Butter Croissant</span>
-                    <span style={styles.receiptItemPrice}>1,100.00</span>
+                  <div style={{ marginBottom: 4 }}>
+                    <div style={{ fontWeight: 'bold' }}>2 මුං ඇට</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', opacity: 0.9 }}>
+                      <span>2.000 Kgs. 800.00 750.00</span>
+                      <span>1,500.00</span>
+                    </div>
                   </div>
-                  <div style={styles.receiptItemRow}>
-                    <span style={styles.receiptItemName}>1x Iced Caramel Latte</span>
-                    <span style={styles.receiptItemPrice}>950.00</span>
+                  <div style={{ marginBottom: 4 }}>
+                    <div style={{ fontWeight: 'bold' }}>3 RATTHI 200G</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', opacity: 0.9 }}>
+                      <span>10.000 Pcs. 650.00 638.00</span>
+                      <span>6,380.00</span>
+                    </div>
                   </div>
                 </div>
 
                 <div style={styles.receiptDivider}>--------------------------------</div>
 
                 {/* Summary */}
-                <div style={styles.receiptTotals}>
-                  <div style={styles.receiptTotalRow}>
-                    <span>Subtotal:</span>
-                    <span>{currency} 2,900.00</span>
+                <div style={{ fontSize: '0.85em', textAlign: 'left' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Sub Total</span>
+                    <span>28,226.50</span>
                   </div>
-                  {settings.showTaxDetails && (
-                    <div style={styles.receiptTotalRow}>
-                      <span>Tax:</span>
-                      <span>{currency} 0.00</span>
-                    </div>
-                  )}
-                  <div style={{ ...styles.receiptTotalRow, ...styles.receiptGrandTotal }}>
-                    <span>TOTAL:</span>
-                    <span>{currency} 3,132.00</span>
+                  <div style={{ borderTop: '1px dashed #000', margin: '3px 0' }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '1.05em' }}>
+                    <span>Grand Total</span>
+                    <span>28,226.50</span>
                   </div>
-                  <div style={styles.receiptTotalRow}>
-                    <span>Paid Cash:</span>
-                    <span>{currency} 3,500.00</span>
+                  <div style={{ borderTop: '1px dashed #000', margin: '3px 0' }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Cash &nbsp;28,226.50</span>
+                    <span>Card &nbsp;0.00</span>
                   </div>
-                  <div style={styles.receiptTotalRow}>
-                    <span>Change:</span>
-                    <span>{currency} 368.00</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Cash Tendered</span>
+                    <span>28,226.50</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Cash To Be Returned</span>
+                    <span>0.00</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>පෙර ණය මුදල</span>
+                    <span>0.00</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
+                    <span>මුලු මුදල</span>
+                    <span>28,226.50</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', marginTop: 3 }}>
+                    <span>Total Discount</span>
+                    <span>1,110.30</span>
                   </div>
                 </div>
 
@@ -672,12 +720,9 @@ export const PrintingOptions: React.FC<PrintingOptionsProps> = ({
 
                 {/* Footer */}
                 <div style={styles.receiptFooter}>
-                  <p style={{ margin: 0 }}>{footerText}</p>
-                  <div style={styles.barcodeSim}>
-                    ||||| ||| ||||||| |||| |||||
-                  </div>
-                  <small style={{ display: 'block', marginTop: 4, opacity: 0.7 }}>
-                    Device: {settings.selectedDeviceName}
+                  <p style={{ margin: 0, fontWeight: 'bold' }}>*THANKS FOR SHOPING WITH US*</p>
+                  <small style={{ display: 'block', marginTop: 2, fontSize: '0.75em' }}>
+                    {footerText || 'SOFTWARE BY LEAFWAY TECHNOLOGIES/HATTON'}
                   </small>
                 </div>
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import { type AdminOutletContext } from '../App';
 import {
@@ -215,6 +215,18 @@ const createSaleNo = () => {
   const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   return `POS-${datePart}-${Date.now().toString().slice(-6)}`;
 };
+
+interface SearchSuggestionItem {
+  id: string;
+  baseProduct: PosProduct;
+  variantId?: number;
+  name: string;
+  sku: string;
+  barcode: string;
+  category: string;
+  price: number;
+  stock: number;
+}
 
 const PosSystem: React.FC = () => {
   const { theme } = useOutletContext<AdminOutletContext>();
@@ -852,7 +864,7 @@ const PosSystem: React.FC = () => {
         if (isMounted) {
           setCreditCustomers(apiCustomers);
         }
-      } catch {}
+      } catch { }
     };
 
     const loadVariants = async () => {
@@ -868,7 +880,7 @@ const PosSystem: React.FC = () => {
           stock_quantity: Number(rec.stock_quantity || rec.stock || 0),
         }));
         if (isMounted) setProductVariants(mapped);
-      } catch {}
+      } catch { }
     };
 
     loadProducts();
@@ -880,26 +892,72 @@ const PosSystem: React.FC = () => {
     };
   }, []);
 
-  const filteredProducts = useMemo(() => {
-    const normalizedQuery = query.toLowerCase();
+  const searchSuggestions = useMemo<SearchSuggestionItem[]>(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return [];
 
-    return products.filter((product) => {
+    const results: SearchSuggestionItem[] = [];
+    const addedKeys = new Set<string>();
+
+    products.forEach((product) => {
       const matchesCategory = category === 'All' || product.category === category;
+      if (!matchesCategory) return;
+
       const vars = productVariants.filter((v) => v.product_id === product.id);
-      const matchesVariant = vars.some(
-        (v) =>
-          v.variant_name.toLowerCase().includes(normalizedQuery) ||
-          v.barcode.toLowerCase().includes(normalizedQuery),
-      );
+      const prodName = product.name.toLowerCase();
+      const prodSku = (product.sku || '').toLowerCase();
+      const prodBarcode = (product.barcode || '').toLowerCase();
 
-      const matchesQuery =
-        product.name.toLowerCase().includes(normalizedQuery) ||
-        product.sku.toLowerCase().includes(normalizedQuery) ||
-        product.barcode.toLowerCase().includes(normalizedQuery) ||
-        matchesVariant;
+      const prodMatches =
+        prodName.includes(normalizedQuery) ||
+        prodSku.includes(normalizedQuery) ||
+        (prodBarcode && prodBarcode.includes(normalizedQuery));
 
-      return matchesCategory && matchesQuery;
+      if (prodMatches) {
+        const key = `prod-${product.id}`;
+        if (!addedKeys.has(key)) {
+          addedKeys.add(key);
+          results.push({
+            id: key,
+            baseProduct: product,
+            name: product.name,
+            sku: product.sku || '',
+            barcode: product.barcode || '',
+            category: product.category,
+            price: product.price,
+            stock: product.stock,
+          });
+        }
+      }
+
+      vars.forEach((v) => {
+        const varName = (v.variant_name || '').toLowerCase();
+        const varBarcode = (v.barcode || '').toLowerCase();
+        const varMatches =
+          varName.includes(normalizedQuery) ||
+          (varBarcode && varBarcode.includes(normalizedQuery));
+
+        if (varMatches) {
+          const key = `var-${product.id}-${v.id}`;
+          if (!addedKeys.has(key)) {
+            addedKeys.add(key);
+            results.push({
+              id: key,
+              baseProduct: product,
+              variantId: v.id,
+              name: `${product.name} (${v.variant_name})`,
+              sku: v.barcode || product.sku || '',
+              barcode: v.barcode || product.barcode || '',
+              category: product.category,
+              price: v.selling_price || product.price,
+              stock: v.stock_quantity,
+            });
+          }
+        }
+      });
     });
+
+    return results;
   }, [category, productVariants, products, query]);
 
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
@@ -931,9 +989,9 @@ const PosSystem: React.FC = () => {
     selectedCreditCustomer.id !== 1 &&
     creditBalance > 0 &&
     availableCredit >= creditBalance;
-  const maxProductIndex = Math.max(filteredProducts.length - 1, 0);
-  const safeSelectedProductIndex = Math.min(selectedProductIndex, maxProductIndex);
-  const selectedProduct = filteredProducts[safeSelectedProductIndex];
+  const maxSuggestionIndex = Math.max(searchSuggestions.length - 1, 0);
+  const safeSelectedProductIndex = selectedProductIndex >= 0 ? Math.min(selectedProductIndex, maxSuggestionIndex) : -1;
+  const selectedSuggestion = safeSelectedProductIndex >= 0 ? searchSuggestions[safeSelectedProductIndex] : null;
   const isLightMode = theme === 'light';
   const themed = (style: React.CSSProperties, lightStyle: React.CSSProperties = {}) =>
     isLightMode ? { ...style, ...lightStyle } : style;
@@ -949,29 +1007,41 @@ const PosSystem: React.FC = () => {
   const printConfig = useMemo(() => {
     let paperWidth = 58;
     let storeName = 'NOVA POS STORE';
-    let storeAddress = 'Main Street, Colombo';
-    let storePhone = '0787450360';
-    let storeTaxNo = 'VAT-987654321';
+    let storeAddress = '';
+    let storePhone = '';
+    let storeTaxNo = '';
     let footerText = 'Thank you for shopping with us!';
+    let currencySymbol = 'LKR';
+    let logoUrl = '';
+    let printLogo = true;
+    let showTaxDetails = true;
+    let selectedDeviceName = '';
+    let printCopies = 1;
 
     try {
       const savedOptions = localStorage.getItem('mpos_printing_options');
       if (savedOptions) {
         const parsed = JSON.parse(savedOptions);
         if (parsed.paperWidth) paperWidth = Number(parsed.paperWidth);
+        if (typeof parsed.printLogoOnReceipt === 'boolean') printLogo = parsed.printLogoOnReceipt;
+        if (typeof parsed.showTaxDetails === 'boolean') showTaxDetails = parsed.showTaxDetails;
+        if (typeof parsed.selectedDeviceName === 'string') selectedDeviceName = parsed.selectedDeviceName;
+        if (Number.isFinite(Number(parsed.printCopies))) printCopies = Math.max(1, Number(parsed.printCopies));
       }
       const savedProfile = localStorage.getItem('mpos_store_profile');
       if (savedProfile) {
         const p = JSON.parse(savedProfile);
         if (p.store_name) storeName = p.store_name;
-        if (p.address_line1 || p.city) storeAddress = [p.address_line1, p.city].filter(Boolean).join(', ');
+        if (p.address_line1 || p.city || p.address_line2) storeAddress = [p.address_line1, p.address_line2, p.city].filter(Boolean).join(', ');
         if (p.phone) storePhone = p.phone;
         if (p.tax_number) storeTaxNo = p.tax_number;
         if (p.receipt_footer) footerText = p.receipt_footer;
+        if (p.currency_code) currencySymbol = p.currency_code;
+        if (p.logo_url || p.logo) logoUrl = p.logo_url || p.logo;
       }
     } catch { }
 
-    return { paperWidth, storeName, storeAddress, storePhone, storeTaxNo, footerText };
+    return { paperWidth, storeName, storeAddress, storePhone, storeTaxNo, footerText, currencySymbol, logoUrl, printLogo, showTaxDetails, selectedDeviceName, printCopies };
   }, [lastInvoice]);
 
   const returnToTerminal = () => {
@@ -990,16 +1060,24 @@ const PosSystem: React.FC = () => {
     const is58 = printConfig.paperWidth <= 58;
     const pageWidth = is58 ? 164 : 226;
     const itemCount = lastInvoice.items.length;
-    const pageHeight = Math.max(380 + itemCount * 22, 450);
+    const curr = printConfig.currencySymbol || 'LKR';
+    const pageHeight = Math.max(400 + itemCount * 24, 460);
 
     const pdfCommands: string[] = ['0.5 w'];
     let y = pageHeight - 25;
 
-    // Header
+    // Store Title
     const storeTitle = (printConfig.storeName || 'NOVA POS STORE').toUpperCase();
-    const storeTitleX = Math.max(10, (pageWidth - storeTitle.length * 7) / 2);
-    pdfCommands.push(`BT /F1 13 Tf ${storeTitleX.toFixed(1)} ${y.toFixed(1)} Td (${escapePdf(storeTitle)}) Tj ET`);
-    y -= 14;
+    const storeTitleX = Math.max(10, (pageWidth - storeTitle.length * 6.5) / 2);
+    pdfCommands.push(`BT /F1 12 Tf ${storeTitleX.toFixed(1)} ${y.toFixed(1)} Td (${escapePdf(storeTitle)}) Tj ET`);
+    y -= 13;
+
+    if (printConfig.storeTaxNo) {
+      const taxStr = `VAT/TAX No: ${printConfig.storeTaxNo}`;
+      const taxX = Math.max(8, (pageWidth - taxStr.length * 4.2) / 2);
+      pdfCommands.push(`BT /F2 8 Tf ${taxX.toFixed(1)} ${y.toFixed(1)} Td (${escapePdf(taxStr)}) Tj ET`);
+      y -= 11;
+    }
 
     if (printConfig.storeAddress) {
       const addrX = Math.max(8, (pageWidth - printConfig.storeAddress.length * 4.2) / 2);
@@ -1021,10 +1099,10 @@ const PosSystem: React.FC = () => {
 
     // Meta
     const metaList: [string, string][] = [
-      ['Sale No:', lastInvoice.sale_no],
-      ['Date:', new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })],
+      ['Invoice No:', lastInvoice.sale_no],
+      ['Date/Time:', new Date(lastInvoice.sold_at || Date.now()).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' ' + new Date(lastInvoice.sold_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })],
       ['Cashier:', lastInvoice.cashier_name],
-      ['Customer:', lastInvoice.customer_name],
+      ['Customer:', lastInvoice.customer_name || 'WALK-IN'],
       ['Payment:', lastInvoice.payment_method],
     ];
 
@@ -1042,16 +1120,17 @@ const PosSystem: React.FC = () => {
     y -= 12;
 
     // Items Header
-    pdfCommands.push(`BT /F1 8.5 Tf 10 ${y.toFixed(1)} Td (ITEMS) Tj ET`);
-    pdfCommands.push(`BT /F1 8.5 Tf ${(pageWidth - 50).toFixed(1)} ${y.toFixed(1)} Td (AMOUNT) Tj ET`);
+    pdfCommands.push(`BT /F1 8.5 Tf 10 ${y.toFixed(1)} Td (ITEM DESCRIPTION) Tj ET`);
+    pdfCommands.push(`BT /F1 8.5 Tf ${(pageWidth - 65).toFixed(1)} ${y.toFixed(1)} Td (AMOUNT (${escapePdf(curr)})) Tj ET`);
     y -= 12;
 
     // Line items
-    lastInvoice.items.forEach((item) => {
-      pdfCommands.push(`BT /F1 8.5 Tf 10 ${y.toFixed(1)} Td (${escapePdf(item.product_name)}) Tj ET`);
+    lastInvoice.items.forEach((item, idx) => {
+      const itemTitle = `${idx + 1}. ${item.product_name}`;
+      pdfCommands.push(`BT /F1 8.5 Tf 10 ${y.toFixed(1)} Td (${escapePdf(itemTitle.slice(0, 26))}) Tj ET`);
       y -= 10;
-      const subStr = `${item.quantity} x LKR ${item.unit_price.toFixed(2)}`;
-      const totStr = `LKR ${item.line_total.toFixed(2)}`;
+      const subStr = `${item.quantity} x ${curr} ${item.unit_price.toFixed(2)}`;
+      const totStr = `${curr} ${item.line_total.toFixed(2)}`;
       pdfCommands.push(`BT /F2 8 Tf 14 ${y.toFixed(1)} Td (${escapePdf(subStr)}) Tj ET`);
       pdfCommands.push(`BT /F1 8.5 Tf ${(pageWidth - 10 - totStr.length * 4.8).toFixed(1)} ${y.toFixed(1)} Td (${escapePdf(totStr)}) Tj ET`);
       y -= 12;
@@ -1064,9 +1143,9 @@ const PosSystem: React.FC = () => {
 
     // Financial Summary
     const summaryList: [string, string][] = [
-      ['Subtotal:', `LKR ${lastInvoice.subtotal.toFixed(2)}`],
-      ...(lastInvoice.discount_amount > 0 ? ([['Discount:', `-LKR ${lastInvoice.discount_amount.toFixed(2)}`]] as [string, string][]) : []),
-      ['Tax:', `LKR ${lastInvoice.tax_amount.toFixed(2)}`],
+      ['Subtotal:', `${curr} ${lastInvoice.subtotal.toFixed(2)}`],
+      ...(lastInvoice.discount_amount > 0 ? ([['Discount:', `-${curr} ${lastInvoice.discount_amount.toFixed(2)}`]] as [string, string][]) : []),
+      ...(lastInvoice.tax_amount > 0 ? ([['Tax / VAT:', `${curr} ${lastInvoice.tax_amount.toFixed(2)}`]] as [string, string][]) : []),
     ];
 
     summaryList.forEach(([lbl, val]) => {
@@ -1080,8 +1159,8 @@ const PosSystem: React.FC = () => {
     pdfCommands.push(`8 ${y.toFixed(1)} m ${pageWidth - 8} ${y.toFixed(1)} l S`);
     y -= 12;
 
-    const totVal = `LKR ${lastInvoice.total_amount.toFixed(2)}`;
-    pdfCommands.push(`BT /F1 9.5 Tf 10 ${y.toFixed(1)} Td (TOTAL AMOUNT:) Tj ET`);
+    const totVal = `${curr} ${lastInvoice.total_amount.toFixed(2)}`;
+    pdfCommands.push(`BT /F1 9.5 Tf 10 ${y.toFixed(1)} Td (GRAND TOTAL:) Tj ET`);
     pdfCommands.push(`BT /F1 10 Tf ${(pageWidth - 10 - totVal.length * 5.5).toFixed(1)} ${y.toFixed(1)} Td (${escapePdf(totVal)}) Tj ET`);
     y -= 12;
 
@@ -1089,10 +1168,10 @@ const PosSystem: React.FC = () => {
     y -= 12;
 
     // Paid & Change
-    const paidStr = `LKR ${lastInvoice.paid_amount.toFixed(2)}`;
+    const paidStr = `${curr} ${lastInvoice.paid_amount.toFixed(2)}`;
     const changeLbl = lastInvoice.payment_method === 'Credit' ? 'Credit Balance:' : 'Change Due:';
-    const changeVal = lastInvoice.payment_method === 'Credit' ? lastInvoice.credit_amount : lastInvoice.change_amount;
-    const changeStr = `LKR ${changeVal.toFixed(2)}`;
+    const changeVal = lastInvoice.payment_method === 'Credit' ? (lastInvoice.credit_amount || 0) : lastInvoice.change_amount;
+    const changeStr = `${curr} ${changeVal.toFixed(2)}`;
 
     pdfCommands.push(`BT /F2 8.5 Tf 10 ${y.toFixed(1)} Td (Amount Paid:) Tj ET`);
     pdfCommands.push(`BT /F2 8.5 Tf ${(pageWidth - 10 - paidStr.length * 4.8).toFixed(1)} ${y.toFixed(1)} Td (${escapePdf(paidStr)}) Tj ET`);
@@ -1164,54 +1243,48 @@ ${450 + streamLength}
     setLastAction(`Receipt ${lastInvoice.sale_no} PDF downloaded successfully`);
   };
 
+  const printReceipt = useCallback(async () => {
+    const receipt = document.getElementById('pos-printable-receipt');
+    if (!receipt) return;
+
+    if (window.electronAPI?.printSilent) {
+      const printed = await window.electronAPI.printSilent({
+        html: receipt.outerHTML,
+        paperWidth: printConfig.paperWidth,
+        copies: printConfig.printCopies,
+        deviceName: printConfig.selectedDeviceName,
+      });
+      setLastAction(printed ? 'Receipt sent to printer!' : 'Unable to print receipt. Check the selected printer.');
+      return;
+    }
+
+    // Keep browser development mode usable; the packaged Electron app uses silent IPC above.
+    window.print();
+    setLastAction('Receipt sent to printer!');
+  }, [printConfig]);
+
   useEffect(() => {
     if (!lastInvoice) return;
 
-    const checkAutoPrint = () => {
-      let paperWidth = 58;
-      let autoPrint = true;
-      let silentPrinting = true;
-      let storeName = 'NOVA POS STORE';
-      let storeAddress = 'Main Street, Colombo';
-      let storePhone = '0787450360';
-      let storeTaxNo = 'VAT-987654321';
-      let footerText = 'Thank you for shopping with us!';
+    let autoPrint = true;
 
-      try {
-        const savedOptions = localStorage.getItem('mpos_printing_options');
-        if (savedOptions) {
-          const parsed = JSON.parse(savedOptions);
-          paperWidth = parsed.paperWidth || 58;
-          autoPrint = parsed.autoPrintOnPayment !== false;
-          silentPrinting = parsed.silentPrinting !== false;
-        }
-
-        const savedProfile = localStorage.getItem('mpos_store_profile');
-        if (savedProfile) {
-          const p = JSON.parse(savedProfile);
-          if (p.store_name) storeName = p.store_name;
-          if (p.address_line1 || p.city) storeAddress = [p.address_line1, p.city].filter(Boolean).join(', ');
-          if (p.phone) storePhone = p.phone;
-          if (p.tax_number) storeTaxNo = p.tax_number;
-          if (p.receipt_footer) footerText = p.receipt_footer;
-        }
-      } catch {
-        // default values fallback
+    try {
+      const savedOptions = localStorage.getItem('mpos_printing_options');
+      if (savedOptions) {
+        const parsed = JSON.parse(savedOptions);
+        autoPrint = parsed.autoPrintOnPayment !== false;
       }
+    } catch {
+      // default values fallback
+    }
 
-      return { autoPrint, paperWidth, silentPrinting, storeName, storeAddress, storePhone, storeTaxNo, footerText };
-    };
-
-    const printingConfig = checkAutoPrint();
-
-    if (printingConfig.autoPrint) {
+    if (autoPrint) {
       const timer = setTimeout(() => {
-        window.print();
-        setLastAction('Receipt sent to printer!');
+        void printReceipt();
       }, 300);
       return () => clearTimeout(timer);
     }
-  }, [lastInvoice]);
+  }, [lastInvoice, printReceipt]);
 
   const resetCheckout = () => {
     setCart([]);
@@ -1312,7 +1385,7 @@ ${450 + streamLength}
           },
           'stockMovement',
         );
-      } catch {}
+      } catch { }
     }
   };
 
@@ -1376,9 +1449,9 @@ ${450 + streamLength}
       payments:
         payment === 'Credit'
           ? [
-              ...(paidAmount > 0 ? [{ method: 'cash', amount: paidAmount }] : []),
-              { method: 'credit', amount: overrides.credit_amount ?? total },
-            ]
+            ...(paidAmount > 0 ? [{ method: 'cash', amount: paidAmount }] : []),
+            { method: 'credit', amount: overrides.credit_amount ?? total },
+          ]
           : paidAmount > 0
             ? [{ method: payment.toLowerCase(), amount: paidAmount }]
             : [],
@@ -1453,17 +1526,49 @@ ${450 + streamLength}
     setLastAction(`${product.name} (${addQty} ${product.unit || product.unit_name || 'qty'}) added`);
   };
 
-  const handleSelectSuggestion = (product: PosProduct) => {
-    const vars = productVariants.filter((v) => v.product_id === product.id);
-    if (vars.length > 0) {
-      setVariantModalProduct(product);
-      setQuery('');
-      setIsDropdownOpen(false);
+  const handleSelectSuggestionItem = (item: SearchSuggestionItem) => {
+    if (item.variantId) {
+      const variantProduct: PosProduct = {
+        ...item.baseProduct,
+        id: item.baseProduct.id * 100000 + item.variantId,
+        name: item.name,
+        price: item.price,
+        barcode: item.barcode,
+        stock: item.stock,
+      };
+      addToCart(variantProduct);
     } else {
-      addToCart(product);
-      setQuery('');
-      setIsDropdownOpen(false);
+      addToCart(item.baseProduct);
     }
+    setQuery('');
+    setIsDropdownOpen(false);
+  };
+
+  const handleSearchEnter = (searchQuery: string) => {
+    const trimmed = searchQuery.trim().toLowerCase();
+    if (!trimmed || searchSuggestions.length === 0) return;
+
+    const exactBarcodeMatches = searchSuggestions.filter(
+      (s) => (s.barcode || s.sku).trim().toLowerCase() === trimmed,
+    );
+
+    // If EXACTLY 1 item matches this barcode, add it directly!
+    if (exactBarcodeMatches.length === 1) {
+      handleSelectSuggestionItem(exactBarcodeMatches[0]);
+      return;
+    }
+
+    // If MULTIPLE items match (or barcode scan with >1 matches):
+    // If cashier explicitly used Arrow keys or hovered mouse to highlight an item:
+    if (selectedSuggestion && selectedProductIndex >= 0) {
+      handleSelectSuggestionItem(selectedSuggestion);
+      return;
+    }
+
+    // Otherwise (barcode scanner scanned a barcode with >1 items, or initial Enter):
+    // DO NOT ADD ANYTHING AUTOMATICALLY!
+    // Keep search dropdown menu open displaying all matching items for cashier selection!
+    setIsDropdownOpen(true);
   };
 
   useEffect(() => {
@@ -1497,36 +1602,22 @@ ${450 + streamLength}
         return;
       }
 
-      if (target === searchInputRef.current) {
-        if (event.key === 'ArrowDown') {
-          event.preventDefault();
-          setIsDropdownOpen(true);
-          setSelectedProductIndex((current) =>
-            Math.min(current + 1, maxProductIndex),
-          );
-          return;
+      // GLOBAL FUNCTION KEYS (F10, F9, F7, F4) MUST WORK EVEN WHEN CURSOR IS IN SEARCH BAR OR INPUT
+      if (event.key === 'F10') {
+        event.preventDefault();
+        if (showCashModal) {
+          if (amountPaid >= total) {
+            void completeCashSale();
+          }
+        } else {
+          openCashModal();
         }
-
-        if (event.key === 'ArrowUp') {
-          event.preventDefault();
-          setIsDropdownOpen(true);
-          setSelectedProductIndex((current) => Math.max(current - 1, 0));
-          return;
-        }
-
-        if (event.key === 'Enter') {
-          event.preventDefault();
-          if (selectedProduct) handleSelectSuggestion(selectedProduct);
-          return;
-        }
+        return;
       }
 
-      if (isTyping) return;
-
-      if (event.key === 'F7') {
+      if (event.key === 'F9') {
         event.preventDefault();
-        if (activeSession) setShowDrawerDetailsModal(true);
-        else setShowStartSessionModal(true);
+        void completeSale();
         return;
       }
 
@@ -1536,17 +1627,40 @@ ${450 + streamLength}
         return;
       }
 
-      if (event.key === 'F9') {
+      if (event.key === 'F7') {
         event.preventDefault();
-        completeSale();
+        if (activeSession) setShowDrawerDetailsModal(true);
+        else setShowStartSessionModal(true);
         return;
       }
 
-      if (event.key === 'F10') {
-        event.preventDefault();
-        openCashModal();
-        return;
+      if (target === searchInputRef.current) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setIsDropdownOpen(true);
+          setSelectedProductIndex((current) =>
+            current < 0 ? 0 : Math.min(current + 1, maxSuggestionIndex),
+          );
+          return;
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setIsDropdownOpen(true);
+          setSelectedProductIndex((current) =>
+            current < 0 ? maxSuggestionIndex : Math.max(current - 1, 0),
+          );
+          return;
+        }
+
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          handleSearchEnter(query);
+          return;
+        }
       }
+
+      if (isTyping) return;
 
       if ((event.ctrlKey || event.metaKey) && event.key === 'Backspace') {
         event.preventDefault();
@@ -1579,16 +1693,20 @@ ${450 + streamLength}
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
   }, [
+    activeSession,
     amountPaid,
     cart,
     category,
     customer,
     discount,
-    filteredProducts.length,
+    maxSuggestionIndex,
     orderNote,
     paymentMethod,
+    products,
+    productVariants,
     query,
-    selectedProduct,
+    selectedSuggestion,
+    showCashModal,
     lastInvoice,
     total,
   ]);
@@ -1891,7 +2009,7 @@ ${450 + streamLength}
               onChange={(event) => {
                 const val = event.target.value;
                 setQuery(val);
-                setSelectedProductIndex(0);
+                setSelectedProductIndex(-1);
                 setIsDropdownOpen(val.trim().length > 0);
               }}
               onFocus={() => {
@@ -1930,9 +2048,9 @@ ${450 + streamLength}
               <div style={themed(styles.dropdownHeader, styles.dropdownHeaderLight)}>
                 <span>
                   <i className="ti ti-list-search" style={{ marginRight: 6 }} aria-hidden="true" />
-                  {filteredProducts.length === 1
-                    ? '1 product suggestion'
-                    : `${filteredProducts.length} product suggestions`}
+                  {searchSuggestions.length === 1
+                    ? '1 item found'
+                    : `${searchSuggestions.length} items found`}
                 </span>
                 <span style={styles.dropdownShortcuts}>
                   <kbd style={themed(styles.kbd, styles.kbdLight)}>↑↓</kbd> navigate
@@ -1941,21 +2059,22 @@ ${450 + streamLength}
                 </span>
               </div>
 
-              {filteredProducts.length === 0 ? (
+              {searchSuggestions.length === 0 ? (
                 <div style={themed(styles.dropdownEmpty, styles.dropdownEmptyLight)}>
                   <i className="ti ti-package-off" style={{ fontSize: 24, marginBottom: 6, display: 'block' }} aria-hidden="true" />
                   No products found matching &ldquo;{query}&rdquo;
                 </div>
               ) : (
                 <div style={styles.dropdownList}>
-                  {filteredProducts.map((product, index) => {
-                    const isSelected = safeSelectedProductIndex === index;
-                    const inCart = cart.some((item) => item.id === product.id);
-                    const isOutOfStock = product.stock !== undefined && product.stock <= 0;
+                  {searchSuggestions.map((item, index) => {
+                    const isSelected = safeSelectedProductIndex === index && selectedProductIndex >= 0;
+                    const itemCartId = item.variantId ? item.baseProduct.id * 100000 + item.variantId : item.baseProduct.id;
+                    const inCart = cart.some((c) => c.id === itemCartId);
+                    const isOutOfStock = item.stock !== undefined && item.stock <= 0;
 
                     return (
                       <div
-                        key={product.id}
+                        key={item.id}
                         style={themed(
                           {
                             ...styles.dropdownItem,
@@ -1965,14 +2084,29 @@ ${450 + streamLength}
                             ...(isSelected ? styles.dropdownItemActiveLight : {}),
                           }
                         )}
-                        onClick={() => handleSelectSuggestion(product)}
+                        onClick={() => handleSelectSuggestionItem(item)}
                         onMouseEnter={() => setSelectedProductIndex(index)}
                       >
                         <div style={styles.dropdownItemLeft}>
                           <div style={styles.dropdownItemTitleRow}>
                             <span style={themed(styles.dropdownItemName, styles.textLight)}>
-                              {product.name}
+                              {item.name}
                             </span>
+                            {item.variantId && (
+                              <span
+                                style={{
+                                  fontSize: 10,
+                                  padding: '1px 5px',
+                                  borderRadius: 4,
+                                  background: 'var(--app-accent-soft, rgba(39, 174, 79, 0.15))',
+                                  color: 'var(--app-accent, #27AE4F)',
+                                  fontWeight: 700,
+                                  marginLeft: 6,
+                                }}
+                              >
+                                Variant
+                              </span>
+                            )}
                             {inCart && (
                               <span style={styles.dropdownCartBadge}>
                                 <i className="ti ti-shopping-cart-check" aria-hidden="true" /> In Cart
@@ -1981,10 +2115,10 @@ ${450 + streamLength}
                           </div>
                           <div style={styles.dropdownItemMeta}>
                             <span style={themed(styles.dropdownSkuTag, styles.skuTagLight)}>
-                              {product.sku || product.barcode || 'N/A'}
+                              {item.barcode || item.sku || 'No Barcode'}
                             </span>
                             <span style={themed(styles.dropdownCategoryTag, styles.mutedLight)}>
-                              {product.category}
+                              {item.category}
                             </span>
                           </div>
                         </div>
@@ -1992,24 +2126,24 @@ ${450 + streamLength}
                         <div style={styles.dropdownItemRight}>
                           <div style={{ textAlign: 'right' }}>
                             <div style={themed(styles.dropdownItemPrice, styles.textLight)}>
-                              {formatMoney(product.price)}
+                              {formatMoney(item.price)}
                             </div>
                             <span
                               style={{
                                 ...styles.dropdownStockBadge,
                                 backgroundColor: isOutOfStock
                                   ? 'rgba(239,68,68,0.15)'
-                                  : product.stock <= (product.minimumStock || 5)
+                                  : item.stock <= (item.baseProduct.minimumStock || 5)
                                     ? 'rgba(245,158,11,0.15)'
                                     : 'rgba(16,185,129,0.15)',
                                 color: isOutOfStock
                                   ? '#EF4444'
-                                  : product.stock <= (product.minimumStock || 5)
+                                  : item.stock <= (item.baseProduct.minimumStock || 5)
                                     ? '#F59E0B'
                                     : '#10B981',
                               }}
                             >
-                              {isOutOfStock ? 'Out of stock' : `${product.stock} left`}
+                              {isOutOfStock ? 'Out of stock' : `${item.stock} left`}
                             </span>
                           </div>
                           <button
@@ -2025,7 +2159,7 @@ ${450 + streamLength}
                             )}
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleSelectSuggestion(product);
+                              handleSelectSuggestionItem(item);
                             }}
                             title="Add to cart"
                           >
@@ -2243,22 +2377,6 @@ ${450 + streamLength}
                 {method}
               </button>
             ))}
-          </div>
-
-          <div style={styles.paidBlock}>
-            <label style={themed(styles.discountLabel, styles.textLight)}>Amount paid</label>
-            <input
-              style={themed(styles.paidInput, styles.inputLight)}
-              type="number"
-              min={0}
-              value={amountPaid}
-              onChange={(event) => setAmountPaid(Number(event.target.value) || 0)}
-              disabled={paymentMethod !== 'Cash'}
-            />
-            <div style={themed(styles.changeDue, styles.surfaceLight)}>
-              <span>Change due</span>
-              <strong>{formatMoney(changeDue)}</strong>
-            </div>
           </div>
 
           <div style={styles.totals}>
@@ -2541,13 +2659,12 @@ ${450 + streamLength}
                         }}
                       >
                         <i
-                          className={`ti ${
-                            method === 'Cash'
-                              ? 'ti-cash'
-                              : method === 'Card'
-                                ? 'ti-credit-card'
-                                : 'ti-user-dollar'
-                          }`}
+                          className={`ti ${method === 'Cash'
+                            ? 'ti-cash'
+                            : method === 'Card'
+                              ? 'ti-credit-card'
+                              : 'ti-user-dollar'
+                            }`}
                           style={{ fontSize: 20 }}
                           aria-hidden="true"
                         />
@@ -2620,26 +2737,7 @@ ${450 + streamLength}
                     </div>
                   </div>
 
-                  <div
-                    style={{
-                      ...themed(styles.posReadoutCard, styles.posReadoutCardLight),
-                      background: amountPaid >= total ? 'rgba(39, 174, 79, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-                      borderColor: amountPaid >= total ? '#27AE4F' : '#EF4444',
-                    }}
-                  >
-                    <span style={{ ...styles.posReadoutLabel, color: amountPaid >= total ? '#27AE4F' : '#EF4444' }}>
-                      {amountPaid >= total ? 'Change Due' : 'Balance Remaining'}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: 20,
-                        fontWeight: 900,
-                        color: amountPaid >= total ? '#27AE4F' : '#EF4444',
-                      }}
-                    >
-                      {amountPaid >= total ? formatMoney(changeDue) : formatMoney(total - amountPaid)}
-                    </span>
-                  </div>
+
                 </div>
 
                 {/* Touch Keypad & Submit */}
@@ -2805,13 +2903,12 @@ ${450 + streamLength}
                         }}
                       >
                         <i
-                          className={`ti ${
-                            method === 'Cash'
-                              ? 'ti-cash'
-                              : method === 'Card'
-                                ? 'ti-credit-card'
-                                : 'ti-user-dollar'
-                          }`}
+                          className={`ti ${method === 'Cash'
+                            ? 'ti-cash'
+                            : method === 'Card'
+                              ? 'ti-credit-card'
+                              : 'ti-user-dollar'
+                            }`}
                           style={{ fontSize: 20 }}
                           aria-hidden="true"
                         />
@@ -2997,26 +3094,26 @@ ${450 + streamLength}
               }
               #pos-printable-receipt, #pos-printable-receipt * {
                 visibility: visible !important;
+                color: #000000 !important;
+                background: #ffffff !important;
+                -webkit-font-smoothing: none !important;
+                -moz-osx-font-smoothing: unset !important;
+                text-rendering: geometricPrecision !important;
+                font-weight: 700 !important;
+                opacity: 1 !important;
               }
               #pos-printable-receipt {
                 position: absolute !important;
                 left: 0 !important;
                 top: 0 !important;
-                width: 100% !important;
-                max-width: ${printConfig.paperWidth}mm !important;
+                width: calc(100% + 2mm) !important;
+                max-width: none !important;
                 margin: 0 auto !important;
-                padding: 6px 8px !important;
+                padding: 2px 0 !important;
                 box-sizing: border-box !important;
-                font-family: Helvetica, Arial, sans-serif !important;
-                font-size: ${printConfig.paperWidth <= 58 ? '11px' : '12.5px'} !important;
-                line-height: 1.35 !important;
-                font-weight: 600 !important;
-                text-rendering: optimizeLegibility !important;
-                -webkit-font-smoothing: antialiased !important;
-                -moz-osx-font-smoothing: grayscale !important;
-                filter: contrast(200%) !important;
-                background: #ffffff !important;
-                color: #000000 !important;
+                font-family: Arial, 'Segoe UI', sans-serif !important;
+                font-size: ${printConfig.paperWidth <= 58 ? '10.5px' : '11.5px'} !important;
+                line-height: 1.2 !important;
                 box-shadow: none !important;
                 border: none !important;
               }
@@ -3037,137 +3134,260 @@ ${450 + streamLength}
               </button>
             </div>
 
-            {/* Exact Screenshot Receipt Template */}
+            {/* High-Contrast Clear Thermal Receipt Template */}
             <div
               style={{
-                fontFamily: "Helvetica, Arial, sans-serif",
+                fontFamily: "Arial, 'Segoe UI', sans-serif",
                 color: '#000000',
                 background: '#ffffff',
-                padding: '12px 14px',
-                fontSize: printConfig.paperWidth <= 58 ? '11.5px' : '13.5px',
-                lineHeight: '1.4',
+                padding: '4px 0',
+                fontSize: printConfig.paperWidth <= 58 ? '10.5px' : '11.5px',
+                lineHeight: '1.2',
+                fontWeight: '500',
                 boxSizing: 'border-box',
+                WebkitFontSmoothing: 'none',
+                textRendering: 'geometricPrecision',
               }}
             >
-              {/* STORE HEADER */}
-              <div style={{ textAlign: 'center', marginBottom: 12 }}>
-                <div style={{ fontWeight: '800', fontSize: '1.5em', letterSpacing: '0.5px', color: '#000000', marginBottom: 4 }}>
-                  {printConfig.storeName}
-                </div>
-                {printConfig.storeAddress && <div style={{ fontWeight: '400', fontSize: '1.05em', color: '#000000' }}>{printConfig.storeAddress}</div>}
-                {printConfig.storePhone && <div style={{ fontWeight: '400', fontSize: '1.05em', color: '#000000' }}>Tel: {printConfig.storePhone}</div>}
-              </div>
-
-              {/* SOLID DIVIDER LINE */}
-              <div style={{ borderTop: '1.5px solid #000000', margin: '12px 0' }} />
-
-              {/* TRANSACTION METADATA */}
-              <div style={{ fontSize: '1.05em', margin: '6px 0' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                  <span>Sale No:</span>
-                  <strong style={{ fontWeight: '800' }}>{lastInvoice.sale_no}</strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                  <span>Date:</span>
-                  <strong style={{ fontWeight: '800' }}>{new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                  <span>Cashier:</span>
-                  <strong style={{ fontWeight: '800' }}>{lastInvoice.cashier_name}</strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                  <span>Customer:</span>
-                  <strong style={{ fontWeight: '800' }}>{lastInvoice.customer_name}</strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                  <span>Payment:</span>
-                  <strong style={{ fontWeight: '800' }}>{lastInvoice.payment_method}</strong>
-                </div>
-              </div>
-
-              {/* SOLID DIVIDER LINE */}
-              <div style={{ borderTop: '1.5px solid #000000', margin: '12px 0' }} />
-
-              {/* ITEMS TABLE HEADER */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '800', fontSize: '1.1em', letterSpacing: '0.5px', marginBottom: 6 }}>
-                <span>ITEMS</span>
-                <span>AMOUNT</span>
-              </div>
-
-              {/* ITEMS ROWS */}
-              <div style={{ margin: '6px 0' }}>
-                {lastInvoice.items.map((item) => (
-                  <div key={`${lastInvoice.sale_no}-${item.product_id}`} style={{ marginBottom: 8 }}>
-                    <div style={{ fontWeight: '800', fontSize: '1.1em', wordBreak: 'break-word' }}>
-                      {item.product_name}
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1em', marginTop: 2 }}>
-                      <span>{item.quantity} x {formatMoney(item.unit_price)}</span>
-                      <strong style={{ fontWeight: '800' }}>{formatMoney(item.line_total)}</strong>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* SOLID DIVIDER LINE */}
-              <div style={{ borderTop: '1.5px solid #000000', margin: '12px 0' }} />
-
-              {/* FINANCIAL SUMMARY */}
-              <div style={{ fontSize: '1.05em', margin: '6px 0' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <span>Subtotal:</span>
-                  <span>{formatMoney(lastInvoice.subtotal)}</span>
-                </div>
-                {lastInvoice.discount_amount > 0 && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <span>Discount:</span>
-                    <span>-{formatMoney(lastInvoice.discount_amount)}</span>
+              {/* STORE HEADER LOGO & INFO */}
+              <div style={{ textAlign: 'center', marginBottom: 5 }}>
+                {printConfig.logoUrl ? (
+                  <img
+                    src={printConfig.logoUrl}
+                    alt="Store Logo"
+                    style={{
+                      maxHeight: printConfig.paperWidth <= 58 ? '120px' : '160px',
+                      maxWidth: '96%',
+                      objectFit: 'contain',
+                      margin: '0 auto 6px auto',
+                      display: 'block',
+                    }}
+                  />
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
+                    <svg width="38" height="26" viewBox="0 0 24 24" fill="none" stroke="#000000" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: 2 }}>
+                      <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                      <polyline points="9 22 9 12 15 12 15 22"></polyline>
+                    </svg>
                   </div>
                 )}
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <span>Tax:</span>
-                  <span>{formatMoney(lastInvoice.tax_amount)}</span>
+                <div style={{ fontSize: '1.25em', fontWeight: '700', letterSpacing: '0.2px', textTransform: 'uppercase', color: '#000000' }}>
+                  {printConfig.storeName || 'NOVA POS STORE'}
                 </div>
+                {printConfig.storeTaxNo && (
+                  <div style={{ fontSize: '0.9em', fontWeight: '700', color: '#000000', marginTop: 1 }}>
+                    VAT/TAX No: {printConfig.storeTaxNo}
+                  </div>
+                )}
+                {printConfig.storeAddress && (
+                  <div style={{ fontSize: '0.9em', fontWeight: '700', color: '#000000', whiteSpace: 'pre-line', marginTop: 2 }}>
+                    {printConfig.storeAddress}
+                  </div>
+                )}
+                {printConfig.storePhone && (
+                  <div style={{ fontSize: '0.9em', fontWeight: '700', color: '#000000', marginTop: 1 }}>
+                    Tel: {printConfig.storePhone}
+                  </div>
+                )}
               </div>
 
-              {/* SOLID DIVIDER LINE */}
-              <div style={{ borderTop: '1.5px solid #000000', margin: '12px 0' }} />
+              {/* DIVIDER */}
+              <div style={{ borderTop: '1px solid #000000', height: 4, marginTop: 2 }} />
 
-              {/* GRAND TOTAL ROW */}
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  fontSize: '1.25em',
-                  fontWeight: '800',
-                  margin: '8px 0',
-                }}
-              >
-                <span>TOTAL AMOUNT:</span>
-                <span>{formatMoney(lastInvoice.total_amount)}</span>
-              </div>
-
-              {/* SOLID DIVIDER LINE */}
-              <div style={{ borderTop: '1.5px solid #000000', margin: '12px 0' }} />
-
-              {/* PAID AND CHANGE */}
-              <div style={{ fontSize: '1.05em', margin: '6px 0' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <span>Amount Paid:</span>
-                  <span>{formatMoney(lastInvoice.paid_amount)}</span>
+              {/* TRANSACTION METADATA */}
+              <div style={{ fontSize: '0.9em', margin: '3px 0', lineHeight: '1.25', fontWeight: '500', color: '#000000' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Invoice No:</span>
+                  <strong style={{ fontWeight: '700' }}>{lastInvoice.sale_no}</strong>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.1em', fontWeight: '800' }}>
-                  <span>{lastInvoice.payment_method === 'Credit' ? 'Credit Balance:' : 'Change Due:'}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Date / Time:</span>
                   <span>
-                    {formatMoney(lastInvoice.payment_method === 'Credit' ? lastInvoice.credit_amount : lastInvoice.change_amount)}
+                    {new Date(lastInvoice.sold_at || Date.now()).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-')} {new Date(lastInvoice.sold_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Customer:</span>
+                  <span style={{ fontWeight: '600' }}>{lastInvoice.customer_name || 'WALK-IN'}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Cashier:</span>
+                  <span>{lastInvoice.cashier_name}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Payment:</span>
+                  <span style={{ fontWeight: '700' }}>{lastInvoice.payment_method}</span>
+                </div>
               </div>
 
+              {/* DIVIDER */}
+              <div style={{ borderTop: '1px solid #000000', height: 4, marginTop: 3 }} />
+
+              {/* ITEMS LIST */}
+              <div style={{ margin: '3px 0' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '700', fontSize: '0.85em', marginBottom: 3, textTransform: 'uppercase', color: '#000000' }}>
+                  <span>Item Description</span>
+                  <span>Amount ({printConfig.currencySymbol})</span>
+                </div>
+                <div style={{ borderTop: '1px solid #000000', height: 2, marginBottom: 3 }} />
+
+                {lastInvoice.items.map((item, idx) => {
+                  const sn = idx + 1;
+                  const qtyStr = item.quantity.toFixed(3);
+                  const rawUnit = (item as any).unit_name || (item as any).unit || (item.quantity % 1 === 0 ? 'Pcs' : 'Kgs');
+                  const unitStr = rawUnit.endsWith('.') ? rawUnit : `${rawUnit}`;
+                  const priceVal = item.unit_price;
+                  const amountVal = item.line_total;
+                  const itemDisc = item.discount_amount || 0;
+
+                  return (
+                    <div key={`${lastInvoice.sale_no}-${item.product_id}-${idx}`} style={{ marginBottom: 4 }}>
+                      {/* Line 1: S.N. + Product Name */}
+                      <div style={{ fontWeight: '600', fontSize: '0.95em', wordBreak: 'break-word', display: 'flex', gap: '3px', color: '#000000' }}>
+                        <span>{sn}.</span>
+                        <span style={{ flex: 1 }}>{item.product_name}</span>
+                      </div>
+                      {/* Line 2: Qty x Unit Price ... Amount */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85em', color: '#000000', fontWeight: '500', marginTop: '1px', paddingLeft: '6px' }}>
+                        <span>
+                          {qtyStr} {unitStr} &times; {printConfig.currencySymbol} {priceVal.toFixed(2)}
+                        </span>
+                        <span style={{ fontWeight: '700' }}>
+                          {printConfig.currencySymbol} {amountVal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                      {itemDisc > 0 && (
+                        <div style={{ fontSize: '0.8em', color: '#000000', paddingLeft: '6px', fontStyle: 'italic', fontWeight: '500' }}>
+                          (Disc: -{printConfig.currencySymbol} {itemDisc.toFixed(2)})
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* DIVIDER */}
+              <div style={{ borderTop: '1px solid #000000', height: 4, marginTop: 3 }} />
+
+              {/* TOTALS SECTION */}
+              {(() => {
+                const totalMrpSavings = lastInvoice.items.reduce((sum, item) => {
+                  return sum + (item.discount_amount || 0);
+                }, 0) + (lastInvoice.discount_amount || 0);
+
+                const isCredit = lastInvoice.payment_method?.toLowerCase() === 'credit';
+
+                return (
+                  <div style={{ fontSize: '0.9em', fontWeight: '500', color: '#000000' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                      <span>Subtotal</span>
+                      <span>{printConfig.currencySymbol} {lastInvoice.subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+
+                    {totalMrpSavings > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                        <span>Total Discount</span>
+                        <span>-{printConfig.currencySymbol} {totalMrpSavings.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                    )}
+
+                    {(lastInvoice.tax_amount > 0 || (printConfig.showTaxDetails && lastInvoice.tax_amount >= 0)) && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                        <span>Tax / VAT</span>
+                        <span>{printConfig.currencySymbol} {lastInvoice.tax_amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                    )}
+
+                    <div style={{ borderTop: '1px solid #000000', padding: '5px 0 3px', margin: '5px 0 3px', display: 'flex', justifyContent: 'space-between', fontWeight: '700', fontSize: '1.15em', color: '#000000' }}>
+                      <span>GRAND TOTAL</span>
+                      <span>{printConfig.currencySymbol} {lastInvoice.total_amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                      <span>Amount Paid</span>
+                      <span>{printConfig.currencySymbol} {lastInvoice.paid_amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+
+                    {isCredit ? (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '600', marginBottom: 3 }}>
+                        <span>Credit Balance</span>
+                        <span>{printConfig.currencySymbol} {(lastInvoice.credit_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                        <span>Change Due</span>
+                        <span>{printConfig.currencySymbol} {lastInvoice.change_amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* PAID STAMP */}
+              <div style={{ textAlign: 'center', margin: '7px 0 5px 0', fontWeight: '700', fontSize: '0.85em', letterSpacing: '0.3px', lineHeight: '1.2', textTransform: 'uppercase' }}>
+                <div
+                  style={{
+                    display: 'inline-block',
+                    padding: '3px 0',
+                    color: '#000000',
+                    fontWeight: '700',
+                    fontSize: '0.85em',
+                    letterSpacing: '0.3px',
+                    lineHeight: '1.2',
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  {lastInvoice.payment_method?.toUpperCase() === 'CREDIT' ? 'CREDIT SALE - COMPLETED' : 'PAID - THANK YOU'}
+                </div>
+              </div>
+
+              {/* BARCODE SVG */}
+              {(() => {
+                const code = lastInvoice.sale_no;
+                if (!code) return null;
+                const bars: number[] = [2, 1, 2, 1, 1, 2];
+                for (let i = 0; i < code.length; i++) {
+                  const charCode = code.charCodeAt(i);
+                  bars.push((charCode % 3) + 1, ((charCode * 2) % 3) + 1, (charCode % 2) + 1, ((charCode + 1) % 3) + 1);
+                }
+                bars.push(2, 1, 2, 2, 1);
+
+                let currentX = 10;
+                const height = 34;
+                const barElements: React.ReactNode[] = [];
+
+                bars.forEach((width, index) => {
+                  const isBlack = index % 2 === 0;
+                  if (isBlack) {
+                    barElements.push(
+                      <rect key={index} x={currentX} y="0" width={width * 1.4} height={height} fill="#000000" />
+                    );
+                  }
+                  currentX += width * 1.4;
+                });
+
+                const totalWidth = currentX + 10;
+
+                return (
+                  <div style={{ textAlign: 'center', marginTop: 6, marginBottom: 2 }}>
+                    <svg width="100%" height="45" viewBox={`0 0 ${totalWidth} ${height + 14}`} preserveAspectRatio="xMidYMid meet">
+                      {barElements}
+                      <text x={totalWidth / 2} y={height + 11} fontSize="11" fontFamily="monospace" textAnchor="middle" fill="#000000" fontWeight="900">
+                        {code}
+                      </text>
+                    </svg>
+                  </div>
+                );
+              })()}
+
               {/* FOOTER */}
-              <div style={{ textAlign: 'center', marginTop: 16 }}>
-                <div style={{ fontWeight: '800', fontSize: '1.1em', marginBottom: 6 }}>{printConfig.footerText}</div>
-                <div style={{ fontSize: '0.85em', opacity: 0.85 }}>*** POWERED BY NOVA POS ***</div>
+              <div style={{ textAlign: 'center', marginTop: 6, fontSize: '0.8em', color: '#000000', fontWeight: '500' }}>
+                <div style={{ fontWeight: '700', margin: '3px 0', textTransform: 'uppercase', letterSpacing: '0.2px' }}>
+                  *** THANK YOU FOR YOUR BUSINESS ***
+                </div>
+                <div style={{ fontSize: '0.8em', textTransform: 'uppercase', letterSpacing: '0.1px', fontWeight: '500' }}>
+                  {printConfig.footerText || 'Powered by NOVA POS'}
+                </div>
               </div>
             </div>
 
@@ -3175,7 +3395,7 @@ ${450 + streamLength}
               <button
                 type="button"
                 style={{ ...styles.invoiceReturnBtn, flex: 1, background: '#534AB7', color: '#ffffff' }}
-                onClick={() => window.print()}
+                onClick={() => void printReceipt()}
               >
                 <i className="ti ti-printer" aria-hidden="true" /> Re-print
               </button>
@@ -4241,22 +4461,22 @@ ${450 + streamLength}
                                       log.type === 'opening_float'
                                         ? 'rgba(59, 130, 246, 0.15)'
                                         : log.type === 'paid_in'
-                                        ? 'rgba(34, 197, 94, 0.15)'
-                                        : log.type === 'paid_out'
-                                        ? 'rgba(239, 68, 68, 0.15)'
-                                        : log.type === 'cash_sale'
-                                        ? 'rgba(16, 185, 129, 0.15)'
-                                        : 'rgba(168, 85, 247, 0.15)',
+                                          ? 'rgba(34, 197, 94, 0.15)'
+                                          : log.type === 'paid_out'
+                                            ? 'rgba(239, 68, 68, 0.15)'
+                                            : log.type === 'cash_sale'
+                                              ? 'rgba(16, 185, 129, 0.15)'
+                                              : 'rgba(168, 85, 247, 0.15)',
                                     color:
                                       log.type === 'opening_float'
                                         ? '#3B82F6'
                                         : log.type === 'paid_in'
-                                        ? '#22C55E'
-                                        : log.type === 'paid_out'
-                                        ? '#EF4444'
-                                        : log.type === 'cash_sale'
-                                        ? '#10B981'
-                                        : '#A855F7',
+                                          ? '#22C55E'
+                                          : log.type === 'paid_out'
+                                            ? '#EF4444'
+                                            : log.type === 'cash_sale'
+                                              ? '#10B981'
+                                              : '#A855F7',
                                   }}
                                 >
                                   <i
@@ -4264,12 +4484,12 @@ ${450 + streamLength}
                                       log.type === 'opening_float'
                                         ? 'ti ti-inbox'
                                         : log.type === 'paid_in'
-                                        ? 'ti ti-circle-plus'
-                                        : log.type === 'paid_out'
-                                        ? 'ti ti-circle-minus'
-                                        : log.type === 'cash_sale'
-                                        ? 'ti ti-cash'
-                                        : 'ti ti-lock'
+                                          ? 'ti ti-circle-plus'
+                                          : log.type === 'paid_out'
+                                            ? 'ti ti-circle-minus'
+                                            : log.type === 'cash_sale'
+                                              ? 'ti ti-cash'
+                                              : 'ti ti-lock'
                                     }
                                   />
                                 </div>
@@ -6364,14 +6584,14 @@ const styles: Record<string, React.CSSProperties> = {
     maxHeight: 'calc(100vh - 32px)',
     overflowY: 'auto',
     background: '#2F2F2F',
-    border: '1px solid #555555',
-    borderRadius: 8,
+    border: 'none',
+    borderRadius: 0,
     color: '#FFFFFF',
     boxShadow: '0 30px 90px rgba(0,0,0,0.38)',
   },
   invoicePopupLight: {
     background: '#FFFFFF',
-    border: '1px solid #D0D5DD',
+    border: 'none',
     color: '#1F2937',
   },
   invoiceHeader: {

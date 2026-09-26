@@ -64,7 +64,7 @@ export const offlineLogin = async (phone: string, password: string) => {
     };
     try {
       await db.users.add(newUser);
-    } catch {}
+    } catch { }
     user = newUser;
   }
 
@@ -404,7 +404,7 @@ export const offlineExportDatabase = async (): Promise<string> => {
   let storeProfileData = null;
   try {
     if (storeProfileRaw) storeProfileData = JSON.parse(storeProfileRaw);
-  } catch {}
+  } catch { }
 
   const exportData = {
     version: 1,
@@ -432,7 +432,7 @@ export const offlineImportDatabase = async (jsonString: string): Promise<void> =
   if (data.store_profile) {
     try {
       localStorage.setItem('mpos_store_profile', JSON.stringify(data.store_profile));
-    } catch {}
+    } catch { }
   }
 
   await db.transaction(

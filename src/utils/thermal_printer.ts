@@ -1,6 +1,16 @@
 /**
- * NOVA POS - ESC/POS Raw Thermal Printer & Silent Direct Print Engine
+ * NOVA POS - ESC/POS Raw Thermal Printer & Direct Print Engine
  */
+
+export interface ReceiptPrintItem {
+  name: string;
+  quantity: number;
+  price: number;
+  total: number;
+  unit?: string;
+  mrp?: number;
+  discount?: number;
+}
 
 export interface ReceiptPrintData {
   saleNo: string;
@@ -11,20 +21,18 @@ export interface ReceiptPrintData {
   cashierName: string;
   customerName: string;
   paymentMethod: string;
-  items: Array<{
-    name: string;
-    quantity: number;
-    price: number;
-    total: number;
-  }>;
+  items: ReceiptPrintItem[];
   subtotal: number;
   discount: number;
   tax: number;
   total: number;
   paidAmount: number;
   changeAmount: number;
+  creditAmount?: number;
   footerText?: string;
   paperWidth?: number; // 80 or 58 mm
+  currencySymbol?: string;
+  soldAt?: string;
 }
 
 /**
@@ -35,6 +43,16 @@ export function generateEscPosBytes(data: ReceiptPrintData): Uint8Array {
   const encoder = new TextEncoder();
   const bytes: number[] = [];
 
+  const is58mm = (data.paperWidth || 58) <= 58;
+  const maxLineLen = is58mm ? 32 : 48;
+  const lineSeparator = '-'.repeat(maxLineLen) + '\n';
+  const doubleSeparator = '='.repeat(maxLineLen) + '\n';
+
+  const padBetween = (left: string, right: string, width: number): string => {
+    const spaceCount = Math.max(1, width - left.length - right.length);
+    return left + ' '.repeat(spaceCount) + right;
+  };
+
   // Initialize printer: ESC @ (0x1B, 0x40)
   bytes.push(0x1b, 0x40);
 
@@ -44,84 +62,108 @@ export function generateEscPosBytes(data: ReceiptPrintData): Uint8Array {
   // Align Center: ESC a 1 (0x1B, 0x61, 0x01)
   bytes.push(0x1b, 0x61, 0x01);
 
-  // Double Height/Width for Header: GS ! 0x11 (0x1D, 0x21, 0x11)
+  // Store Name (Double Height/Width: GS ! 0x11)
   bytes.push(0x1d, 0x21, 0x11);
-  bytes.push(...encoder.encode(`${data.storeName.toUpperCase()}\n`));
+  bytes.push(...encoder.encode(`${(data.storeName || 'NOVA POS STORE').toUpperCase()}\n`));
 
   // Reset Font Size: GS ! 0 (0x1D, 0x21, 0x00)
   bytes.push(0x1d, 0x21, 0x00);
 
+  if (data.storeTaxNo) {
+    bytes.push(...encoder.encode(`VAT/Tax No: ${data.storeTaxNo}\n`));
+  }
   if (data.storeAddress) {
     bytes.push(...encoder.encode(`${data.storeAddress}\n`));
   }
   if (data.storePhone) {
     bytes.push(...encoder.encode(`Tel: ${data.storePhone}\n`));
   }
-  if (data.storeTaxNo) {
-    bytes.push(...encoder.encode(`Tax ID: ${data.storeTaxNo}\n`));
-  }
-
-  const is58mm = (data.paperWidth || 58) <= 58;
-  const lineSeparator = is58mm
-    ? '--------------------------------\n'
-    : '------------------------------------------------\n';
 
   bytes.push(...encoder.encode(lineSeparator));
 
   // Align Left: ESC a 0 (0x1B, 0x61, 0x00)
   bytes.push(0x1b, 0x61, 0x00);
-  bytes.push(...encoder.encode(`Sale #: ${data.saleNo}\n`));
-  bytes.push(...encoder.encode(`Date  : ${new Date().toLocaleString()}\n`));
-  bytes.push(...encoder.encode(`Cashier: ${data.cashierName}\n`));
-  bytes.push(...encoder.encode(`Customer: ${data.customerName}\n`));
-  bytes.push(...encoder.encode(`Payment : ${data.paymentMethod}\n`));
+
+  const dateStr = data.soldAt
+    ? new Date(data.soldAt).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-') + ' ' + new Date(data.soldAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-') + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  bytes.push(...encoder.encode(`Invoice No : ${data.saleNo}\n`));
+  bytes.push(...encoder.encode(`Date       : ${dateStr}\n`));
+  bytes.push(...encoder.encode(`Customer   : ${data.customerName || 'WALK-IN'}\n`));
+  bytes.push(...encoder.encode(`Cashier    : ${data.cashierName}\n`));
+  bytes.push(...encoder.encode(`Payment    : ${data.paymentMethod}\n`));
+
   bytes.push(...encoder.encode(lineSeparator));
 
-  // Line items
-  data.items.forEach((item) => {
-    const itemLine = `${item.quantity}x ${item.name}`;
-    const priceStr = item.total.toFixed(2);
-    if (is58mm) {
-      bytes.push(...encoder.encode(`${itemLine.slice(0, 20).padEnd(22)} ${priceStr.padStart(9)}\n`));
-    } else {
-      bytes.push(...encoder.encode(`${itemLine.slice(0, 34).padEnd(36)} ${priceStr.padStart(10)}\n`));
+  // Line items (Clean 2-line layout per item to prevent character truncation)
+  data.items.forEach((item, idx) => {
+    const sn = idx + 1;
+    const qtyStr = item.quantity.toFixed(3);
+    const unitStr = item.unit || 'Pcs';
+    const priceStr = item.price.toFixed(2);
+    const totalStr = item.total.toFixed(2);
+
+    // Line 1: S.N + Item Name
+    bytes.push(...encoder.encode(`${sn}. ${item.name}\n`));
+
+    // Line 2: Qty x Price ... Amount
+    const leftText = `   ${qtyStr} ${unitStr} x ${priceStr}`;
+    const row2 = padBetween(leftText, totalStr, maxLineLen) + '\n';
+    bytes.push(...encoder.encode(row2));
+
+    if (item.discount && item.discount > 0) {
+      const discText = `   (Disc: -${item.discount.toFixed(2)})`;
+      bytes.push(...encoder.encode(`${discText}\n`));
     }
   });
 
   bytes.push(...encoder.encode(lineSeparator));
 
   // Totals
-  const formatRow = (label: string, val: string) => {
-    if (is58mm) {
-      return `${label.padEnd(18)} ${val.padStart(13)}\n`;
-    }
-    return `${label.padEnd(30)} ${val.padStart(16)}\n`;
-  };
+  const curr = data.currencySymbol ? `${data.currencySymbol} ` : '';
 
-  bytes.push(...encoder.encode(formatRow('Subtotal', data.subtotal.toFixed(2))));
+  bytes.push(...encoder.encode(padBetween('Subtotal', `${curr}${data.subtotal.toFixed(2)}`, maxLineLen) + '\n'));
+
   if (data.discount > 0) {
-    bytes.push(...encoder.encode(formatRow('Discount', `-${data.discount.toFixed(2)}`)));
+    bytes.push(...encoder.encode(padBetween('Discount', `-${curr}${data.discount.toFixed(2)}`, maxLineLen) + '\n'));
   }
-  bytes.push(...encoder.encode(formatRow('Tax', data.tax.toFixed(2))));
+  if (data.tax > 0) {
+    bytes.push(...encoder.encode(padBetween('Tax / VAT', `${curr}${data.tax.toFixed(2)}`, maxLineLen) + '\n'));
+  }
 
-  // Emphasize Total: ESC E 1 (0x1B, 0x45, 0x01)
+  bytes.push(...encoder.encode(doubleSeparator));
+
+  // Emphasize Grand Total (ESC E 1)
   bytes.push(0x1b, 0x45, 0x01);
-  bytes.push(...encoder.encode(formatRow('TOTAL', `LKR ${data.total.toFixed(2)}`)));
+  bytes.push(...encoder.encode(padBetween('GRAND TOTAL', `${curr}${data.total.toFixed(2)}`, maxLineLen) + '\n'));
   bytes.push(0x1b, 0x45, 0x00);
 
-  bytes.push(...encoder.encode(formatRow('Paid', data.paidAmount.toFixed(2))));
-  bytes.push(...encoder.encode(formatRow('Change', data.changeAmount.toFixed(2))));
+  bytes.push(...encoder.encode(doubleSeparator));
+
+  // Tendered & Change / Credit
+  bytes.push(...encoder.encode(padBetween('Amount Paid', `${curr}${data.paidAmount.toFixed(2)}`, maxLineLen) + '\n'));
+
+  if (data.paymentMethod.toLowerCase() === 'credit') {
+    const cred = data.creditAmount || 0;
+    bytes.push(...encoder.encode(padBetween('Credit Balance', `${curr}${cred.toFixed(2)}`, maxLineLen) + '\n'));
+  } else {
+    bytes.push(...encoder.encode(padBetween('Change Due', `${curr}${data.changeAmount.toFixed(2)}`, maxLineLen) + '\n'));
+  }
+
   bytes.push(...encoder.encode(lineSeparator));
 
   // Align Center for Footer: ESC a 1 (0x1B, 0x61, 0x01)
   bytes.push(0x1b, 0x61, 0x01);
-  bytes.push(...encoder.encode(`${data.footerText || 'Thank you for your business!'}\n`));
-  bytes.push(...encoder.encode('*** POWERED BY NOVA POS ***\n\n\n\n'));
+  bytes.push(0x1b, 0x45, 0x01);
+  bytes.push(...encoder.encode('*** THANK YOU FOR YOUR BUSINESS ***\n'));
+  bytes.push(0x1b, 0x45, 0x00);
+  bytes.push(...encoder.encode(`${data.footerText || 'Powered by NOVA POS'}\n\n\n\n`));
 
-  // Cash Drawer Kick-Out Pulse (Pin 2, 25ms ON, 250ms OFF): ESC p 0 25 250 (0x1B, 0x70, 0x00, 0x19, 0xFA)
+  // Cash Drawer Kick-Out Pulse (Pin 2, 25ms ON, 250ms OFF)
   bytes.push(0x1b, 0x70, 0x00, 0x19, 0xfa);
 
-  // Auto-Cut Paper Command: GS V 66 0 (0x1D, 0x56, 0x42, 0x00)
+  // Auto-Cut Paper Command
   bytes.push(0x1d, 0x56, 0x42, 0x00);
 
   return new Uint8Array(bytes);
@@ -162,3 +204,89 @@ export async function executeSilentDirectPrint(
   });
 }
 
+export function generateFormattedTextReceipt(data: ReceiptPrintData): string {
+  const is58mm = (data.paperWidth || 80) <= 58;
+const width = is58mm ? 32 : 48;
+const lineSep = '-'.repeat(width);
+const doubleSep = '='.repeat(width);
+
+const padBetween = (left: string, right: string, w: number): string => {
+  const spaceCount = Math.max(1, w - left.length - right.length);
+  return left + ' '.repeat(spaceCount) + right;
+};
+
+const centerText = (text: string, w: number): string => {
+  if (text.length >= w) return text;
+  const leftPad = Math.floor((w - text.length) / 2);
+  return ' '.repeat(leftPad) + text;
+};
+
+const lines: string[] = [];
+
+// Header
+lines.push(centerText((data.storeName || 'NOVA POS STORE').toUpperCase(), width));
+if (data.storeTaxNo) lines.push(centerText(`VAT/Tax No: ${data.storeTaxNo}`, width));
+if (data.storeAddress) lines.push(centerText(data.storeAddress, width));
+if (data.storePhone) lines.push(centerText(`Tel: ${data.storePhone}`, width));
+
+lines.push(lineSep);
+
+// Metadata
+const dateStr = data.soldAt
+  ? new Date(data.soldAt).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-') + ' ' + new Date(data.soldAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  : new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-') + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+lines.push(`Invoice No : ${data.saleNo}`);
+lines.push(`Date       : ${dateStr}`);
+lines.push(`Customer   : ${data.customerName || 'WALK-IN CUSTOMER'}`);
+lines.push(`Cashier    : ${data.cashierName || 'Admin'}`);
+lines.push(`Payment    : ${data.paymentMethod || 'Cash'}`);
+
+lines.push(lineSep);
+
+// Items
+data.items.forEach((item, idx) => {
+  const sn = idx + 1;
+  const qtyStr = item.quantity.toString();
+  const unitStr = item.unit || 'Pcs';
+  const priceStr = item.price.toFixed(2);
+  const totalStr = item.total.toFixed(2);
+
+  lines.push(`${sn}. ${item.name}`);
+  const row2Left = `   ${qtyStr} ${unitStr} x ${priceStr}`;
+  lines.push(padBetween(row2Left, totalStr, width));
+  if (item.discount && item.discount > 0) {
+    lines.push(`   (Disc: -${item.discount.toFixed(2)})`);
+  }
+});
+
+lines.push(lineSep);
+
+// Totals
+const curr = data.currencySymbol || 'LKR';
+lines.push(padBetween('Subtotal', `${curr} ${data.subtotal.toFixed(2)}`, width));
+if (data.discount > 0) {
+  lines.push(padBetween('Discount', `-${curr} ${data.discount.toFixed(2)}`, width));
+}
+if (data.tax > 0) {
+  lines.push(padBetween('Tax / VAT', `${curr} ${data.tax.toFixed(2)}`, width));
+}
+
+lines.push(doubleSep);
+lines.push(padBetween('GRAND TOTAL', `${curr} ${data.total.toFixed(2)}`, width));
+lines.push(doubleSep);
+
+lines.push(padBetween('Amount Paid', `${curr} ${data.paidAmount.toFixed(2)}`, width));
+if (data.paymentMethod?.toLowerCase() === 'credit') {
+  lines.push(padBetween('Credit Balance', `${curr} ${(data.creditAmount || 0).toFixed(2)}`, width));
+} else {
+  lines.push(padBetween('Change Due', `${curr} ${data.changeAmount.toFixed(2)}`, width));
+}
+
+lines.push(lineSep);
+lines.push(centerText('*** THANK YOU FOR YOUR BUSINESS ***', width));
+lines.push(centerText(data.footerText || 'Powered by NOVA POS', width));
+lines.push('\n\n\n\n');
+
+return lines.join('\n');
+}

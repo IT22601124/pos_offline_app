@@ -1372,7 +1372,29 @@ const PosManagement: React.FC = () => {
         </div>
 
         <div style={styles.tableWrap}>
-          <table style={styles.table}>
+          <table style={{ ...styles.table, minWidth: 1020 }}>
+            {stockMovementView === 'remaining' ? (
+              <colgroup>
+                <col style={{ width: 220 }} />
+                <col style={{ width: 120 }} />
+                <col style={{ width: 150 }} />
+                <col style={{ width: 150 }} />
+                <col style={{ width: 130 }} />
+                <col style={{ width: 130 }} />
+                <col style={{ width: 120 }} />
+              </colgroup>
+            ) : (
+              <colgroup>
+                <col style={{ width: 110 }} />
+                <col style={{ width: 220 }} />
+                <col style={{ width: 100 }} />
+                <col style={{ width: 90 }} />
+                <col style={{ width: 100 }} />
+                <col style={{ width: 150 }} />
+                <col style={{ width: 260 }} />
+                <col style={{ width: 80 }} />
+              </colgroup>
+            )}
             <thead>
               {stockMovementView === 'remaining' ? (
                 <tr>
@@ -1949,22 +1971,36 @@ const PosManagement: React.FC = () => {
         </div>
 
         <div style={styles.tableWrap}>
-          <table style={styles.table}>
+          <table style={{ ...styles.table, minWidth: 1140 }}>
+            <colgroup>
+              <col style={{ width: 220 }} />
+              <col style={{ width: 100 }} />
+              <col style={{ width: 110 }} />
+              <col style={{ width: 100 }} />
+              <col style={{ width: 80 }} />
+              <col style={{ width: 85 }} />
+              <col style={{ width: 65 }} />
+              <col style={{ width: 55 }} />
+              <col style={{ width: 95 }} />
+              <col style={{ width: 60 }} />
+              <col style={{ width: 90 }} />
+              <col style={{ width: 80 }} />
+            </colgroup>
             <thead>
               <tr>
-                {['Product', 'SKU', 'Category', 'Brand', 'Unit', 'Price', 'Stock', 'Min', 'Value', 'Tax', 'Status', ''].map((heading) => (
-                  <th key={heading} style={styles.th}>{heading}</th>
+                {['Product', 'SKU', 'Category', 'Brand', 'Unit', 'Price', 'Stock', 'Min', 'Value', 'Tax', 'Status', ''].map((heading, index) => (
+                  <th key={heading} style={{ ...styles.th, ...(index === 0 ? { position: 'sticky', left: 0, zIndex: 12 } : {}) }}>{heading}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {filteredProducts.map((product) => (
                 <tr key={product.id} style={styles.tr}>
-                  <td style={styles.td}>
-                    <strong>{product.name}</strong>
+                  <td style={{ ...styles.td, width: 220, maxWidth: 220, overflowWrap: 'anywhere', position: 'sticky', left: 0, zIndex: 5, background: 'var(--app-surface)' }}>
+                    <strong style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.3 }}>{product.name}</strong>
                     <div style={styles.cellSubText}>{product.barcode || 'No barcode'}</div>
                   </td>
-                  <td style={styles.tdMuted}>{product.sku}</td>
+                  <td style={{ ...styles.tdMuted, width: 100, maxWidth: 100, whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.3 }}>{product.sku}</td>
                   <td style={styles.td}>{product.category}</td>
                   <td style={styles.td}>{getProductBrandName(product)}</td>
                   <td style={styles.td}>{getProductUnitName(product)}</td>
@@ -2136,11 +2172,23 @@ const PosManagement: React.FC = () => {
         </div>
 
         <div style={styles.tableWrap}>
-          <table style={styles.table}>
+          <table style={{ ...styles.table, minWidth: 1220 }}>
+            <colgroup>
+              <col style={{ width: 125 }} />
+              <col style={{ width: 240 }} />
+              <col style={{ width: 150 }} />
+              <col style={{ width: 115 }} />
+              <col style={{ width: 105 }} />
+              <col style={{ width: 145 }} />
+              <col style={{ width: 100 }} />
+              <col style={{ width: 135 }} />
+              <col style={{ width: 155 }} />
+              <col style={{ width: 180 }} />
+            </colgroup>
             <thead>
               <tr>
-                {['Code / SKU', 'Product Name', 'Category', 'Current Stock', 'Min Stock', 'Unit', 'Price', 'Stock Value', 'Stock Status', 'Quick Actions'].map((heading) => (
-                  <th key={heading} style={styles.th}>{heading}</th>
+                {['Code / SKU', 'Product Name', 'Category', 'Current Stock', 'Min Stock', 'Unit', 'Price', 'Stock Value', 'Stock Status', 'Quick Actions'].map((heading, index) => (
+                  <th key={heading} style={{ ...styles.th, ...(index === 0 ? { position: 'sticky', left: 0, zIndex: 12 } : {}) }}>{heading}</th>
                 ))}
               </tr>
             </thead>
@@ -2157,9 +2205,9 @@ const PosManagement: React.FC = () => {
 
                 return (
                   <tr key={product.id} style={styles.tr}>
-                    <td style={styles.tdMuted}>{product.sku}</td>
-                    <td style={styles.td}>
-                      <strong>{product.name}</strong>
+                    <td style={{ ...styles.tdMuted, whiteSpace: 'normal', overflowWrap: 'anywhere', position: 'sticky', left: 0, zIndex: 5, background: 'var(--app-surface)' }}>{product.sku}</td>
+                    <td style={{ ...styles.td, width: 240, maxWidth: 240, overflowWrap: 'anywhere' }}>
+                      <strong style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.3 }}>{product.name}</strong>
                       <div style={styles.cellSubText}>{product.barcode || 'No barcode'}</div>
                     </td>
                     <td style={styles.td}>{product.category}</td>
@@ -2271,7 +2319,7 @@ const PosManagement: React.FC = () => {
                           title="Set Exact Quantity"
                         >
                           <i className="ti ti-adjustments" aria-hidden="true" />
-                          Adjust
+
                         </button>
                       </div>
                     </td>
@@ -4945,6 +4993,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid var(--app-border)',
     borderRadius: 12,
     overflowY: 'auto',
+    minWidth: 0,
     maxHeight: '100%',
     display: 'flex',
     flexDirection: 'column',
@@ -5039,21 +5088,35 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
   },
   tableWrap: {
+    width: '100%',
+    maxWidth: '100%',
+    minWidth: 0,
+    overflow: 'auto',
     overflowX: 'auto',
+    overflowY: 'auto',
+    maxHeight: 'calc(100vh - 330px)',
+    minHeight: 260,
+    WebkitOverflowScrolling: 'touch',
+    overscrollBehaviorX: 'contain',
+    scrollbarGutter: 'stable',
+    scrollbarWidth: 'thin',
     padding: '0 12px 12px',
     background: 'linear-gradient(180deg, rgba(39,174,79,0.04), transparent 140px)',
   },
   table: {
     width: '100%',
+    tableLayout: 'fixed',
     borderCollapse: 'separate',
     borderSpacing: '0 8px',
-    minWidth: 820,
+    minWidth: 1100,
   },
   th: {
     position: 'sticky',
     top: 0,
     zIndex: 10,
     textAlign: 'left',
+    whiteSpace: 'normal',
+    overflowWrap: 'anywhere',
     padding: '12px 16px',
     color: 'var(--app-accent-strong)',
     fontSize: 11,

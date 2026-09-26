@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { type AxiosResponse } from 'axios';
 import React, { useEffect, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import apiClient from '../api/clients';
@@ -153,26 +153,42 @@ const SettingsPage: React.FC = () => {
       setIsLoadingStore(true);
       setStoreMessage(null);
 
+      let localProfile: StoreProfile | null = null;
+      try {
+        const saved = localStorage.getItem('mpos_store_profile');
+        if (saved) {
+          localProfile = normalizeStoreProfile(JSON.parse(saved));
+        }
+      } catch {}
+
       try {
         const response = await apiClient.get<StoreProfileResponse>(STORE_PROFILE_ENDPOINT);
         if (!isMounted) return;
 
         const profile = response.data.store_profile;
-        console.log('Store profile:', profile);
-        setStoreProfile(normalizeStoreProfile(profile));
-        setIsStoreEditing(!profile);
-        if (!profile) {
+        if (profile) {
+          const norm = normalizeStoreProfile(profile);
+          setStoreProfile(norm);
+          localStorage.setItem('mpos_store_profile', JSON.stringify(norm));
+          setIsStoreEditing(false);
+        } else if (localProfile && localProfile.store_name) {
+          setStoreProfile(localProfile);
+          setIsStoreEditing(false);
+        } else {
+          setStoreProfile(EMPTY_STORE_PROFILE);
+          setIsStoreEditing(true);
           setStoreMessage({ type: 'info', text: 'No store profile found yet. Complete the form and save it.' });
         }
       } catch (error) {
         if (!isMounted) return;
 
-        if (axios.isAxiosError(error) && error.response?.status === 404) {
+        if (localProfile && localProfile.store_name) {
+          setStoreProfile(localProfile);
+          setIsStoreEditing(false);
+        } else {
           setStoreProfile(EMPTY_STORE_PROFILE);
           setIsStoreEditing(true);
           setStoreMessage({ type: 'info', text: 'No store profile found yet. Complete the form and save it.' });
-        } else {
-          setStoreMessage({ type: 'error', text: getApiErrorMessage(error, 'Store profile could not be loaded.') });
         }
       } finally {
         if (isMounted) {
@@ -244,19 +260,31 @@ const SettingsPage: React.FC = () => {
     setStoreMessage(null);
 
     try {
-      const response = await apiClient.post<StoreProfileResponse>(STORE_PROFILE_LOGO_ENDPOINT, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      const uploadedProfile = normalizeStoreProfile({
-        ...storeProfile,
-        logo: response.data.logo ?? storeProfile.logo,
-        logo_url: response.data.logo_url ?? storeProfile.logo_url,
-        ...response.data.store_profile,
-      });
+      let response: AxiosResponse<StoreProfileResponse> | undefined;
+      try {
+        response = await apiClient.post<StoreProfileResponse>(STORE_PROFILE_LOGO_ENDPOINT, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+      } catch (err) {
+        console.warn('Backend logo upload endpoint unavailable, storing local image:', err);
+      }
 
-      setStoreProfile(uploadedProfile);
-      clearSelectedLogoFile();
-      setStoreMessage({ type: 'success', text: 'Store logo uploaded successfully.' });
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64Url = reader.result as string;
+        const uploadedProfile = normalizeStoreProfile({
+          ...storeProfile,
+          logo: response?.data?.logo || base64Url,
+          logo_url: response?.data?.logo_url || base64Url,
+          ...(response?.data?.store_profile || {}),
+        });
+
+        setStoreProfile(uploadedProfile);
+        localStorage.setItem('mpos_store_profile', JSON.stringify(uploadedProfile));
+        clearSelectedLogoFile();
+        setStoreMessage({ type: 'success', text: 'Store logo uploaded successfully.' });
+      };
+      reader.readAsDataURL(selectedLogoFile);
     } catch (error) {
       setStoreMessage({ type: 'error', text: getApiErrorMessage(error, 'Store logo could not be uploaded.') });
     } finally {
@@ -274,27 +302,38 @@ const SettingsPage: React.FC = () => {
     setIsSavingStore(true);
     setStoreMessage(null);
 
-    try {
-      let response;
+    const normalized = normalizeStoreProfile({ ...storeProfile, ...payload });
+    localStorage.setItem('mpos_store_profile', JSON.stringify(normalized));
 
+    try {
+      let response: AxiosResponse<StoreProfileResponse> | undefined;
       try {
         response = await apiClient.put<StoreProfileResponse>(STORE_PROFILE_ENDPOINT, payload);
       } catch (error) {
-        if (axios.isAxiosError(error) && error.response?.status === 404) {
-          response = await apiClient.post<StoreProfileResponse>(STORE_PROFILE_ENDPOINT, payload);
-        } else {
-          throw error;
+        if (axios.isAxiosError(error) && (error.response?.status === 404 || error.response?.status === 405)) {
+          try {
+            response = await apiClient.post<StoreProfileResponse>(STORE_PROFILE_ENDPOINT, payload);
+          } catch (postErr) {
+            console.warn('Backend store-profile endpoint returned 404, using local profile storage:', postErr);
+          }
         }
       }
 
-      const savedProfile = response.data.store_profile ?? { ...storeProfile, ...payload };
-      const normalized = normalizeStoreProfile(savedProfile);
-      setStoreProfile(normalized);
-      localStorage.setItem('mpos_store_profile', JSON.stringify(normalized));
+      if (response?.data?.store_profile) {
+        const backendNormalized = normalizeStoreProfile(response.data.store_profile);
+        setStoreProfile(backendNormalized);
+        localStorage.setItem('mpos_store_profile', JSON.stringify(backendNormalized));
+      } else {
+        setStoreProfile(normalized);
+      }
+
       setIsStoreEditing(false);
       setStoreMessage({ type: 'success', text: 'Store profile saved successfully.' });
     } catch (error) {
-      setStoreMessage({ type: 'error', text: getApiErrorMessage(error, 'Store profile could not be saved.') });
+      console.warn('Network error saving store profile, using local profile:', error);
+      setStoreProfile(normalized);
+      setIsStoreEditing(false);
+      setStoreMessage({ type: 'success', text: 'Store profile saved locally.' });
     } finally {
       setIsSavingStore(false);
     }
@@ -647,17 +686,52 @@ const SettingsPage: React.FC = () => {
                         </div>
 
                         <div style={styles.summaryGrid}>
-                          <span style={styles.summaryItem}><small>Address</small><strong>{storeProfile.address_line1 || 'Not set'}</strong></span>
-                          <span style={styles.summaryItem}><small>City</small><strong>{storeProfile.city || 'Not set'}</strong></span>
-                          <span style={styles.summaryItem}><small>Phone</small><strong>{storeProfile.phone || 'Not set'}</strong></span>
-                          <span style={styles.summaryItem}><small>Email</small><strong>{storeProfile.email || 'Not set'}</strong></span>
-                          <span style={styles.summaryItem}><small>Tax Number</small><strong>{storeProfile.tax_number || 'Not set'}</strong></span>
-                          <span style={styles.summaryItem}><small>Currency</small><strong>{storeProfile.currency_code || 'LKR'}</strong></span>
+                          <div style={styles.summaryItem}>
+                            <span style={styles.summaryItemLabel}>Address</span>
+                            <strong style={styles.summaryItemValue}>{storeProfile.address_line1 || 'Not set'}</strong>
+                          </div>
+
+                          {storeProfile.address_line2 ? (
+                            <div style={styles.summaryItem}>
+                              <span style={styles.summaryItemLabel}>Address Line 2</span>
+                              <strong style={styles.summaryItemValue}>{storeProfile.address_line2}</strong>
+                            </div>
+                          ) : null}
+
+                          <div style={styles.summaryItem}>
+                            <span style={styles.summaryItemLabel}>City</span>
+                            <strong style={styles.summaryItemValue}>{storeProfile.city || 'Not set'}</strong>
+                          </div>
+
+                          <div style={styles.summaryItem}>
+                            <span style={styles.summaryItemLabel}>Phone</span>
+                            <strong style={styles.summaryItemValue}>{storeProfile.phone || 'Not set'}</strong>
+                          </div>
+
+                          <div style={styles.summaryItem}>
+                            <span style={styles.summaryItemLabel}>Email</span>
+                            <strong style={styles.summaryItemValue}>{storeProfile.email || 'Not set'}</strong>
+                          </div>
+
+                          <div style={styles.summaryItem}>
+                            <span style={styles.summaryItemLabel}>Tax Number</span>
+                            <strong style={styles.summaryItemValue}>{storeProfile.tax_number || 'Not set'}</strong>
+                          </div>
+
+                          <div style={styles.summaryItem}>
+                            <span style={styles.summaryItemLabel}>Currency</span>
+                            <strong style={styles.summaryItemValue}>{storeProfile.currency_code || 'LKR'}</strong>
+                          </div>
                         </div>
 
-                        <div style={{ ...styles.footerPreview, ...styles.summaryItem }}>
-                          <small>Receipt footer</small>
-                          <strong>{storeProfile.receipt_footer || 'Not set'}</strong>
+                        <div style={styles.footerPreviewCard}>
+                          <div style={styles.footerPreviewHeader}>
+                            <i className="ti ti-receipt-2" style={{ color: 'var(--app-accent-strong)', fontSize: 16 }} />
+                            <span style={styles.summaryItemLabel}>Receipt Footer</span>
+                          </div>
+                          <div style={styles.footerPreviewContent}>
+                            {storeProfile.receipt_footer ? `"${storeProfile.receipt_footer}"` : 'Not set'}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -962,20 +1036,22 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
   },
   settingsGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(320px, 0.78fr) minmax(520px, 1.22fr)',
+    width: '100%',
+    maxWidth: 1050,
+    display: 'flex',
+    flexDirection: 'column',
     gap: 16,
-    alignItems: 'start',
   },
   panel: {
     border: '1px solid var(--app-border)',
-    borderRadius: 8,
+    borderRadius: 12,
     background: 'var(--app-surface)',
     boxShadow: 'var(--app-shadow)',
     overflow: 'hidden',
   },
   storePanel: {
     minWidth: 0,
+    width: '100%',
   },
   panelHeader: {
     display: 'flex',
@@ -1081,30 +1157,34 @@ const styles: Record<string, React.CSSProperties> = {
   },
   storeBody: {
     display: 'grid',
-    gap: 14,
-    padding: 16,
+    gap: 16,
+    padding: 20,
   },
   profileSummary: {
     display: 'grid',
-    gridTemplateColumns: '180px minmax(0, 1fr)',
-    gap: 16,
+    gridTemplateColumns: '170px minmax(0, 1fr)',
+    gap: 20,
     border: '1px solid var(--app-border)',
-    borderRadius: 8,
+    borderRadius: 12,
     background: 'var(--app-surface-soft)',
-    padding: 14,
+    padding: 18,
+    alignItems: 'start',
   },
   summaryLogo: {
-    minHeight: 150,
-    border: '1px dashed var(--app-border)',
-    borderRadius: 8,
+    width: '100%',
+    height: 160,
+    border: '1px solid var(--app-border)',
+    borderRadius: 10,
     background: 'var(--app-surface)',
     display: 'grid',
     placeItems: 'center',
     overflow: 'hidden',
+    boxShadow: '0 2px 6px rgba(0, 0, 0, 0.04)',
   },
   summaryDetails: {
-    display: 'grid',
-    gap: 14,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 16,
     minWidth: 0,
   },
   summaryTitleRow: {
@@ -1112,12 +1192,15 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'start',
     justifyContent: 'space-between',
     gap: 12,
+    paddingBottom: 4,
+    borderBottom: '1px solid var(--app-border-soft)',
   },
   summaryTitle: {
     margin: 0,
     color: 'var(--app-text-strong)',
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: 800,
+    letterSpacing: '-0.3px',
   },
   summarySub: {
     margin: '3px 0 0',
@@ -1129,9 +1212,9 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid var(--app-border)',
     color: 'var(--app-muted)',
     background: 'var(--app-surface)',
-    padding: '5px 10px',
+    padding: '6px 12px',
     fontSize: 12,
-    fontWeight: 800,
+    fontWeight: 700,
     whiteSpace: 'nowrap',
   },
   statusBadgeActive: {
@@ -1141,19 +1224,53 @@ const styles: Record<string, React.CSSProperties> = {
   },
   summaryGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-    gap: 10,
+    gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
+    gap: 12,
   },
   summaryItem: {
-    display: 'grid',
-    gap: 3,
-    minWidth: 0,
-  },
-  footerPreview: {
-    display: 'grid',
+    display: 'flex',
+    flexDirection: 'column',
     gap: 4,
-    borderTop: '1px solid var(--app-border-soft)',
-    paddingTop: 12,
+    minWidth: 0,
+    padding: '10px 14px',
+    background: 'var(--app-surface)',
+    borderRadius: 8,
+    border: '1px solid var(--app-border-soft)',
+  },
+  summaryItemLabel: {
+    fontSize: 11,
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: '0.4px',
+    color: 'var(--app-muted)',
+  },
+  summaryItemValue: {
+    fontSize: 13.5,
+    fontWeight: 600,
+    color: 'var(--app-text-strong)',
+    wordBreak: 'break-word',
+    overflowWrap: 'anywhere',
+  },
+  footerPreviewCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    padding: '12px 14px',
+    background: 'var(--app-surface)',
+    borderRadius: 8,
+    border: '1px dashed var(--app-border)',
+  },
+  footerPreviewHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+  },
+  footerPreviewContent: {
+    fontSize: 13,
+    fontWeight: 500,
+    color: 'var(--app-text)',
+    wordBreak: 'break-word',
+    overflowWrap: 'anywhere',
   },
   editHeader: {
     display: 'flex',

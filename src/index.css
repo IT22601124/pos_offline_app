@@ -1,5 +1,8 @@
+@import '@tabler/icons-webfont/dist/tabler-icons.min.css';
+
 :root {
   --app-bg: #16181d;
+  --app-bg-secondary: #252932;
   --app-surface: #202329;
   --app-surface-soft: #252932;
   --app-surface-muted: #2c313b;
@@ -32,6 +35,7 @@
 
 :root[data-theme='light'] {
   --app-bg: #f4f6f8;
+  --app-bg-secondary: #f9fafb;
   --app-surface: #ffffff;
   --app-surface-soft: #f9fafb;
   --app-surface-muted: #f2f4f7;

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   createProduct,
   updateProduct,
@@ -107,6 +107,7 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
   onUnitCreated,
   onSupplierCreated,
 }) => {
+  const formRef = useRef<HTMLFormElement>(null);
   const [form, setForm] = useState<CreateProductPayload>(() => getInitialForm(product, categories, brands, units));
   const [localCategories, setLocalCategories] = useState<PosCategory[]>(categories);
   const [localBrands, setLocalBrands] = useState<PosBrand[]>(brands);
@@ -144,6 +145,38 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
     value: CreateProductPayload[K],
   ) => {
     setForm((previous) => ({ ...previous, [key]: value }));
+  };
+
+  const handleFormKeyDown = (e: React.KeyboardEvent<HTMLFormElement>) => {
+    if (e.key === 'Enter') {
+      const target = e.target as HTMLElement;
+      if (
+        quickAddType ||
+        target.tagName === 'BUTTON' ||
+        target.tagName === 'TEXTAREA' ||
+        (target as HTMLInputElement).type === 'submit' ||
+        (target as HTMLInputElement).type === 'button'
+      ) {
+        return;
+      }
+
+      if (formRef.current) {
+        const focusables = Array.from(
+          formRef.current.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+            'input:not([type="hidden"]):not([type="checkbox"]):not([disabled]), select:not([disabled])'
+          )
+        );
+        const currentIndex = focusables.indexOf(target as any);
+        if (currentIndex !== -1 && currentIndex < focusables.length - 1) {
+          e.preventDefault();
+          const nextElement = focusables[currentIndex + 1];
+          nextElement.focus();
+          if ('select' in nextElement && typeof nextElement.select === 'function') {
+            nextElement.select();
+          }
+        }
+      }
+    }
   };
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -242,7 +275,7 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
 
   return (
     <div style={styles.overlay}>
-      <form style={styles.modal} onSubmit={handleSubmit}>
+      <form ref={formRef} style={styles.modal} onSubmit={handleSubmit} onKeyDown={handleFormKeyDown}>
         <div style={styles.header}>
           <div>
             <h2 style={styles.title}>{isEditMode ? 'Edit product' : 'Add product'}</h2>
@@ -266,6 +299,7 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
             <span style={styles.label}>Barcode</span>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <input
+                autoFocus
                 style={{ ...styles.input, flex: 1 }}
                 value={form.barcode}
                 onChange={(event) => updateField('barcode', event.target.value)}
@@ -280,9 +314,9 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
                   height: 38,
                   padding: '0 12px',
                   borderRadius: 6,
-                  border: '1px solid var(--app-border, #d0d5dd)',
-                  background: 'var(--app-bg-secondary, #f9fafb)',
-                  color: 'var(--app-text, #344054)',
+                  border: '1px solid var(--app-border, #353b46)',
+                  background: 'var(--app-button-bg, #252932)',
+                  color: 'var(--app-button-text, #e4e7ec)',
                   fontSize: 13,
                   fontWeight: 600,
                   cursor: 'pointer',
