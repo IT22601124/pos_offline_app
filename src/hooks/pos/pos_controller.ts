@@ -18,7 +18,26 @@ import {
   offlineGetUnits,
   offlineUpdateProduct
 } from "../../offline/offlineAdapter";
-import { db } from "../../offline/db";
+import {
+  db,
+  type PosPurchaseRecord,
+  type PosPurchaseLineRecord,
+  type PosStockMovementRecord,
+  type PosSupplierTransactionRecord,
+  type SupplierPurchasePaymentMethod,
+  type PosCustomerReturnLine,
+  type PosCustomerReturnRecord,
+} from "../../offline/db";
+
+export type {
+  PosPurchaseRecord,
+  PosPurchaseLineRecord,
+  PosStockMovementRecord,
+  PosSupplierTransactionRecord,
+  SupplierPurchasePaymentMethod,
+  PosCustomerReturnLine,
+  PosCustomerReturnRecord,
+};
 
 
 
@@ -34,6 +53,7 @@ export interface PosProduct {
   unit_name?: string;
   unit?: string;
   price: number;
+  cost_price?: number;
   stock: number;
   minimumStock: number;
   taxRate: number;
@@ -70,6 +90,30 @@ export interface PosUnit {
   name: string;
   shortName: string;
   status: boolean;
+}
+
+export interface ReceiveSupplierStockPayload {
+  supplier: PosSupplier;
+  lines: PosPurchaseLineRecord[];
+  payment_method: SupplierPurchasePaymentMethod;
+  paid_amount: number;
+  discount_amount?: number;
+  tax_amount?: number;
+  freight_amount?: number;
+  reference_no?: string;
+  notes?: string;
+  received_at?: string;
+}
+
+export type SupplierPaymentMethod = Exclude<SupplierPurchasePaymentMethod, 'Credit'>;
+
+export interface SupplierPaymentPayload {
+  supplier: PosSupplier;
+  amount: number;
+  payment_method: SupplierPaymentMethod;
+  purchase_id?: number;
+  reference_no?: string;
+  notes?: string;
 }
 
 export interface CreateProductPayload {
@@ -212,6 +256,218 @@ export const getAllProducts = async (): Promise<PosProduct[]> => {
   return await offlineGetProducts();
 };
 
+export const getSupplierPurchases = async (): Promise<PosPurchaseRecord[]> => {
+  return (await db.pos_purchases.orderBy('received_at').reverse().toArray());
+};
+
+export const getSupplierTransactions = async (): Promise<PosSupplierTransactionRecord[]> => {
+  return (await db.pos_supplier_transactions.orderBy('created_at').reverse().toArray());
+};
+
+export const paySupplierCredit = async (payload: SupplierPaymentPayload): Promise<PosSupplierTransactionRecord> => {
+  const amount = Number(payload.amount);
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('Enter a valid supplier payment amount.');
+
+  let paymentId: number | undefined;
+
+  await db.transaction('rw', db.pos_supplier_transactions, db.pos_purchases, async () => {
+    const transactions = await db.pos_supplier_transactions.where('supplier_id').equals(payload.supplier.id).toArray();
+    const balance = transactions.reduce((total, transaction) => total + (transaction.type === 'purchase' ? transaction.amount : -transaction.amount), 0);
+    if (amount > balance + 0.01) throw new Error(`Payment cannot exceed the outstanding credit of ${balance.toFixed(2)}.`);
+
+    const payment: PosSupplierTransactionRecord = {
+      supplier_id: payload.supplier.id,
+      supplier_name: payload.supplier.name,
+      purchase_id: payload.purchase_id,
+      type: 'payment',
+      amount,
+      payment_method: payload.payment_method,
+      reference_no: payload.reference_no?.trim() || undefined,
+      notes: payload.notes?.trim() || 'Supplier credit payment',
+      created_at: new Date().toISOString(),
+    };
+
+    paymentId = await db.pos_supplier_transactions.add(payment);
+
+    // Allocate payment to unpaid/partially paid purchases (updating paid_amount and credit_amount in pos_purchases)
+    const purchases = await db.pos_purchases.where('supplier_id').equals(payload.supplier.id).toArray();
+    
+    // Prioritize specified purchase_id if provided, then FIFO by received_at ascending
+    purchases.sort((a, b) => {
+      if (payload.purchase_id) {
+        if (a.id === payload.purchase_id) return -1;
+        if (b.id === payload.purchase_id) return 1;
+      }
+      return new Date(a.received_at).getTime() - new Date(b.received_at).getTime();
+    });
+
+    let remainingPayment = amount;
+    for (const purchase of purchases) {
+      if (remainingPayment <= 0) break;
+      const unpaid = purchase.credit_amount ?? Math.max(0, purchase.total_amount - purchase.paid_amount);
+      if (unpaid > 0) {
+        const payForThis = Math.min(remainingPayment, unpaid);
+        const newPaid = purchase.paid_amount + payForThis;
+        const newCredit = Math.max(0, purchase.total_amount - newPaid);
+
+        if (purchase.id) {
+          await db.pos_purchases.update(purchase.id, {
+            paid_amount: newPaid,
+            credit_amount: newCredit,
+          });
+        }
+        remainingPayment -= payForThis;
+      }
+    }
+  });
+
+  return {
+    id: paymentId,
+    supplier_id: payload.supplier.id,
+    supplier_name: payload.supplier.name,
+    purchase_id: payload.purchase_id,
+    type: 'payment',
+    amount,
+    payment_method: payload.payment_method,
+    reference_no: payload.reference_no?.trim() || undefined,
+    notes: payload.notes?.trim() || 'Supplier credit payment',
+    created_at: new Date().toISOString(),
+  };
+};
+
+export const receiveSupplierStock = async (
+  payload: ReceiveSupplierStockPayload,
+): Promise<PosPurchaseRecord> => {
+  const validLines = payload.lines.filter((line) => line.quantity > 0 && line.unit_cost >= 0);
+  if (!payload.supplier.id || validLines.length === 0) throw new Error('Supplier and at least one stock item are required.');
+
+  const subtotal = validLines.reduce((sum, line) => sum + line.line_total, 0);
+  const discountAmount = Math.max(0, Number(payload.discount_amount) || 0);
+  const taxAmount = Math.max(0, Number(payload.tax_amount) || 0);
+  const freightAmount = Math.max(0, Number(payload.freight_amount) || 0);
+  const totalAmount = Math.max(0, subtotal - discountAmount + taxAmount + freightAmount);
+  const paidAmount = Math.min(Math.max(Number(payload.paid_amount) || 0, 0), totalAmount);
+  const creditAmount = Math.max(totalAmount - paidAmount, 0);
+
+  const purchaseNo = `PUR-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Date.now().toString().slice(-6)}`;
+  const receivedAt = payload.received_at || new Date().toISOString();
+  let purchaseId: number | undefined;
+
+  await db.transaction(
+    'rw',
+    db.products,
+    db.pos_purchases,
+    db.pos_supplier_transactions,
+    db.pos_stock_movements,
+    async () => {
+      const purchase: PosPurchaseRecord = {
+        purchase_no: purchaseNo,
+        supplier_id: payload.supplier.id,
+        supplier_name: payload.supplier.name,
+        subtotal,
+        discount_amount: discountAmount > 0 ? discountAmount : undefined,
+        tax_amount: taxAmount > 0 ? taxAmount : undefined,
+        freight_amount: freightAmount > 0 ? freightAmount : undefined,
+        total_amount: totalAmount,
+        paid_amount: paidAmount,
+        credit_amount: creditAmount,
+        payment_method: payload.payment_method,
+        reference_no: payload.reference_no?.trim() || undefined,
+        notes: payload.notes?.trim() || undefined,
+        received_at: receivedAt,
+        lines: validLines,
+      };
+
+      purchaseId = await db.pos_purchases.add(purchase);
+      await db.pos_supplier_transactions.add({
+        supplier_id: payload.supplier.id,
+        supplier_name: payload.supplier.name,
+        purchase_id: purchaseId,
+        type: 'purchase',
+        amount: totalAmount,
+        payment_method: payload.payment_method,
+        reference_no: payload.reference_no?.trim() || undefined,
+        notes: payload.notes?.trim() || undefined,
+        created_at: receivedAt,
+      });
+
+      if (paidAmount > 0) {
+        await db.pos_supplier_transactions.add({
+          supplier_id: payload.supplier.id,
+          supplier_name: payload.supplier.name,
+          purchase_id: purchaseId,
+          type: 'payment',
+          amount: paidAmount,
+          payment_method: payload.payment_method,
+          reference_no: payload.reference_no?.trim() || undefined,
+          notes: `Payment for ${purchaseNo}`,
+          created_at: receivedAt,
+        });
+      }
+
+      for (const line of validLines) {
+        const product = await db.products.get(line.product_id);
+        if (!product) throw new Error(`Product ${line.product_name} could not be found.`);
+
+        const currentStock = Number(product.stock ?? product.stock_quantity ?? 0);
+        const nextStock = currentStock + line.quantity;
+        const minimumStock = Number(product.minimumStock ?? product.minimum_stock ?? 5);
+
+        const updateData: Record<string, any> = {
+          stock: nextStock,
+          stock_quantity: nextStock,
+          cost_price: line.unit_cost,
+          supplier_id: payload.supplier.id,
+          status: nextStock <= 0 ? 'Inactive' : nextStock <= minimumStock ? 'Low stock' : 'Active',
+        };
+
+        if (typeof line.selling_price === 'number' && line.selling_price > 0) {
+          updateData.price = line.selling_price;
+          updateData.selling_price = line.selling_price;
+        }
+
+        await db.products.update(line.product_id, updateData);
+
+        const movement: PosStockMovementRecord = {
+          product_id: line.product_id,
+          product_name: line.product_name,
+          type: 'purchase',
+          quantity: line.quantity,
+          stock_after: nextStock,
+          supplier_id: payload.supplier.id,
+          supplier_name: payload.supplier.name,
+          purchase_id: purchaseId,
+          reference_type: 'supplier_purchase',
+          reference_id: purchaseNo,
+          unit_cost: line.unit_cost,
+          remarks: payload.notes?.trim() || undefined,
+          created_at: receivedAt,
+        };
+        await db.pos_stock_movements.add(movement);
+      }
+    },
+  );
+
+  return {
+    purchase_no: purchaseNo,
+    supplier_id: payload.supplier.id,
+    supplier_name: payload.supplier.name,
+    subtotal,
+    discount_amount: discountAmount > 0 ? discountAmount : undefined,
+    tax_amount: taxAmount > 0 ? taxAmount : undefined,
+    freight_amount: freightAmount > 0 ? freightAmount : undefined,
+    total_amount: totalAmount,
+    paid_amount: paidAmount,
+    credit_amount: creditAmount,
+    payment_method: payload.payment_method,
+    reference_no: payload.reference_no?.trim() || undefined,
+    notes: payload.notes?.trim() || undefined,
+    received_at: receivedAt,
+    lines: validLines,
+    id: purchaseId,
+  };
+};
+
 export const createProduct = async (payload: CreateProductPayload): Promise<PosProduct> => {
   return await offlineAddProduct(payload);
 };
@@ -319,6 +575,7 @@ export const getPosMasterRecords = async (
   if (endpoint.includes('brands')) return await db.brands.toArray() as any;
   if (endpoint.includes('units')) return await db.units.toArray() as any;
   if (endpoint.includes('suppliers')) return await db.suppliers.toArray() as any;
+  if (endpoint.includes('stock-movements')) return await db.pos_stock_movements.toArray() as any;
   if (endpoint.includes('customers')) return await db.customers.toArray() as any;
   if (endpoint.includes('products')) return await db.products.toArray() as any;
   return [];
@@ -585,7 +842,23 @@ export const exportProductsToExcel = (products: PosProduct[], filename = 'produc
     `"${p.status || 'Active'}"`,
   ]);
 
-  const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+  const totalStock = products.reduce((acc, p) => acc + (p.stock ?? 0), 0);
+  const totalValuation = products.reduce((acc, p) => acc + ((p.stock ?? 0) * (p.price ?? 0)), 0);
+
+  const totalsRow = [
+    `"TOTAL (${products.length} PRODUCTS)"`,
+    '""',
+    '""',
+    '""',
+    '""',
+    '""',
+    totalStock,
+    '""',
+    '""',
+    `"Stock Value: LKR ${totalValuation.toLocaleString()}"`,
+  ];
+
+  const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(',')), totalsRow.join(',')].join('\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -626,3 +899,142 @@ export const updatePosSaleStatus = async (
   return await updatePosSale(id, { status, notes });
 };
 
+export interface ProcessCustomerReturnPayload {
+  sale_id?: number;
+  invoice_number: string;
+  customer_id?: number;
+  customer_name: string;
+  refund_method: 'Cash' | 'Store Credit' | 'Bank / Card';
+  items: Array<{
+    product_id: number;
+    product_name: string;
+    product_code?: string;
+    barcode?: string;
+    unit_price: number;
+    quantity: number;
+    refund_amount: number;
+    reason: string;
+    restock: boolean;
+  }>;
+  notes?: string;
+}
+
+export const processCustomerReturn = async (
+  payload: ProcessCustomerReturnPayload
+): Promise<PosCustomerReturnRecord> => {
+  const validItems = payload.items.filter((item) => item.quantity > 0 && item.refund_amount >= 0);
+  if (validItems.length === 0) {
+    throw new Error('Please select at least one item and quantity to return.');
+  }
+
+  const totalRefund = validItems.reduce((sum, item) => sum + item.refund_amount, 0);
+  const returnNo = `RET-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Date.now().toString().slice(-6)}`;
+  const returnedAt = new Date().toISOString();
+  let returnId: number | undefined;
+
+  await db.transaction(
+    'rw',
+    db.products,
+    db.pos_sales,
+    db.customers,
+    db.pos_customer_returns,
+    db.pos_stock_movements,
+    async () => {
+      const returnRecord: PosCustomerReturnRecord = {
+        return_no: returnNo,
+        sale_id: payload.sale_id,
+        invoice_number: payload.invoice_number,
+        customer_id: payload.customer_id || undefined,
+        customer_name: payload.customer_name || 'Walk-in customer',
+        refund_method: payload.refund_method,
+        total_refund: totalRefund,
+        notes: payload.notes?.trim() || undefined,
+        returned_at: returnedAt,
+        items: validItems,
+      };
+
+      returnId = await db.pos_customer_returns.add(returnRecord);
+
+      // If store credit refund and customer exists, top up customer credit / reduce balance
+      if (payload.refund_method === 'Store Credit' && payload.customer_id) {
+        const customer = await db.customers.get(payload.customer_id);
+        if (customer) {
+          const currentBal = Number(customer.balance ?? customer.current_credit ?? 0);
+          const nextBal = currentBal - totalRefund;
+          await db.customers.update(payload.customer_id, {
+            balance: nextBal,
+            current_credit: nextBal,
+          });
+        }
+      }
+
+      // Update Stock and create Stock Movements for restocked items
+      for (const item of validItems) {
+        const product = await db.products.get(item.product_id);
+        if (product) {
+          const currentStock = Number(product.stock ?? product.stock_quantity ?? 0);
+          const nextStock = item.restock ? currentStock + item.quantity : currentStock;
+          const minStock = Number(product.minimumStock ?? product.minimum_stock ?? 5);
+
+          if (item.restock) {
+            await db.products.update(item.product_id, {
+              stock: nextStock,
+              stock_quantity: nextStock,
+              status: nextStock <= 0 ? 'Inactive' : nextStock <= minStock ? 'Low stock' : 'Active',
+            });
+          }
+
+          const movement: PosStockMovementRecord = {
+            product_id: item.product_id,
+            product_name: item.product_name,
+            type: 'customer_return',
+            quantity: item.quantity,
+            stock_after: nextStock,
+            customer_id: payload.customer_id || undefined,
+            customer_name: payload.customer_name,
+            sale_id: payload.sale_id,
+            reference_type: 'customer_return',
+            reference_id: returnNo,
+            unit_cost: item.unit_price,
+            remarks: `Customer return (${item.reason})${item.restock ? ' - Restocked' : ' - Discarded'}`,
+            created_at: returnedAt,
+          };
+          await db.pos_stock_movements.add(movement);
+        }
+      }
+
+      // Check original sale and mark refunded if needed
+      if (payload.sale_id) {
+        const originalSale = await db.pos_sales.get(payload.sale_id);
+        if (originalSale) {
+          await db.pos_sales.update(payload.sale_id, {
+            status: 'Refunded',
+          });
+        }
+      }
+    }
+  );
+
+  return {
+    id: returnId,
+    return_no: returnNo,
+    sale_id: payload.sale_id,
+    invoice_number: payload.invoice_number,
+    customer_id: payload.customer_id,
+    customer_name: payload.customer_name,
+    refund_method: payload.refund_method,
+    total_refund: totalRefund,
+    notes: payload.notes,
+    returned_at: returnedAt,
+    items: validItems,
+  };
+};
+
+export const getCustomerReturns = async (
+  customerId?: number
+): Promise<PosCustomerReturnRecord[]> => {
+  if (customerId) {
+    return await db.pos_customer_returns.where('customer_id').equals(customerId).reverse().toArray();
+  }
+  return await db.pos_customer_returns.orderBy('returned_at').reverse().toArray();
+};

@@ -45,6 +45,96 @@ export interface PosCashTransactionRecord {
   created_at: string;
 }
 
+export type SupplierPurchasePaymentMethod = 'Cash' | 'Credit' | 'Bank Transfer' | 'Online';
+
+export interface PosPurchaseLineRecord {
+  product_id: number;
+  product_name: string;
+  sku: string;
+  quantity: number;
+  unit_cost: number;
+  selling_price?: number;
+  line_total: number;
+}
+
+export interface PosPurchaseRecord {
+  id?: number;
+  purchase_no: string;
+  supplier_id: number;
+  supplier_name: string;
+  subtotal: number;
+  discount_amount?: number;
+  tax_amount?: number;
+  freight_amount?: number;
+  total_amount: number;
+  paid_amount: number;
+  credit_amount: number;
+  payment_method: SupplierPurchasePaymentMethod;
+  reference_no?: string;
+  notes?: string;
+  received_at: string;
+  lines: PosPurchaseLineRecord[];
+}
+
+export interface PosSupplierTransactionRecord {
+  id?: number;
+  supplier_id: number;
+  supplier_name: string;
+  purchase_id?: number;
+  type: 'purchase' | 'payment';
+  amount: number;
+  payment_method: SupplierPurchasePaymentMethod;
+  reference_no?: string;
+  notes?: string;
+  created_at: string;
+}
+
+export interface PosStockMovementRecord {
+  id?: number;
+  product_id: number;
+  product_name: string;
+  type: 'purchase' | 'return' | 'customer_return' | 'sale' | 'adjustment';
+  quantity: number;
+  stock_after: number;
+  supplier_id?: number;
+  supplier_name?: string;
+  customer_id?: number;
+  customer_name?: string;
+  purchase_id?: number;
+  sale_id?: number;
+  reference_type: 'supplier_purchase' | 'customer_return' | 'customer_sale' | 'manual';
+  reference_id: string;
+  unit_cost?: number;
+  remarks?: string;
+  created_at: string;
+}
+
+export interface PosCustomerReturnLine {
+  product_id: number;
+  product_name: string;
+  product_code?: string;
+  barcode?: string;
+  unit_price: number;
+  quantity: number;
+  refund_amount: number;
+  reason: string;
+  restock: boolean;
+}
+
+export interface PosCustomerReturnRecord {
+  id?: number;
+  return_no: string;
+  sale_id?: number;
+  invoice_number: string;
+  customer_id?: number;
+  customer_name: string;
+  refund_method: 'Cash' | 'Store Credit' | 'Bank / Card';
+  total_refund: number;
+  notes?: string;
+  returned_at: string;
+  items: PosCustomerReturnLine[];
+}
+
 export interface PosSettingRecord {
   key: string;
   value: any;
@@ -71,6 +161,7 @@ export class AppOfflineDatabase extends Dexie {
     minimum_stock?: number;
     tax_rate?: number;
     discount_rate?: number;
+    supplier_id?: number;
     image?: string;
     weight?: number;
   }, number>;
@@ -78,6 +169,10 @@ export class AppOfflineDatabase extends Dexie {
 
   pos_sales!: Table<PosSaleRecord, number>;
   pos_cash_transactions!: Table<PosCashTransactionRecord, number>;
+  pos_purchases!: Table<PosPurchaseRecord, number>;
+  pos_supplier_transactions!: Table<PosSupplierTransactionRecord, number>;
+  pos_stock_movements!: Table<PosStockMovementRecord, number>;
+  pos_customer_returns!: Table<PosCustomerReturnRecord, number>;
   pos_settings!: Table<PosSettingRecord, string>;
 
   constructor() {
@@ -94,7 +189,19 @@ export class AppOfflineDatabase extends Dexie {
       customers: '++id, name, phone',
       pos_sales: '++id, invoice_number, customer_id, payment_method, status, created_at',
       pos_cash_transactions: '++id, type, created_at',
+      pos_purchases: '++id, purchase_no, supplier_id, payment_method, received_at',
+      pos_supplier_transactions: '++id, supplier_id, type, created_at',
+      pos_stock_movements: '++id, product_id, supplier_id, type, created_at',
       pos_settings: 'key',
+    });
+    this.version(2).stores({
+      pos_purchases: '++id, purchase_no, supplier_id, payment_method, received_at',
+      pos_supplier_transactions: '++id, supplier_id, type, created_at',
+      pos_stock_movements: '++id, product_id, supplier_id, type, created_at',
+    });
+    this.version(3).stores({
+      pos_customer_returns: '++id, return_no, invoice_number, customer_id, customer_name, returned_at',
+      pos_stock_movements: '++id, product_id, supplier_id, customer_id, type, created_at',
     });
   }
 }

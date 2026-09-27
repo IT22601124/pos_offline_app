@@ -3345,40 +3345,112 @@ ${450 + streamLength}
               {(() => {
                 const code = lastInvoice.sale_no;
                 if (!code) return null;
-                const bars: number[] = [2, 1, 2, 1, 1, 2];
+                const patterns: number[][] = [
+                  [2,1,2,2,2,2], [2,2,2,1,2,2], [2,2,2,2,2,1], [1,2,1,2,2,3], [1,2,1,3,2,2],
+                  [1,3,1,2,2,2], [1,2,2,2,1,3], [1,2,2,3,1,2], [1,3,2,2,1,2], [2,2,1,2,1,3],
+                  [2,2,1,3,1,2], [2,3,1,2,1,2], [1,1,2,2,3,2], [1,2,2,1,3,2], [1,2,2,2,3,1],
+                  [1,1,3,2,2,2], [1,2,3,1,2,2], [1,2,3,2,2,1], [2,2,3,2,1,1], [2,2,1,1,3,2],
+                  [2,2,1,2,3,1], [2,1,3,2,1,2], [2,2,3,1,1,2], [3,1,2,1,3,1], [3,1,1,2,2,2],
+                  [3,2,1,1,2,2], [3,2,1,2,2,1], [3,1,2,2,1,2], [3,2,2,1,1,2], [3,2,2,2,1,1],
+                  [2,1,2,1,2,3], [2,1,2,3,2,1], [2,3,2,1,2,1], [1,1,1,3,2,3], [1,3,1,1,2,3],
+                  [1,3,1,3,2,1], [1,1,2,3,1,3], [1,3,2,1,1,3], [1,3,2,3,1,1], [2,1,1,3,1,3],
+                  [2,3,1,1,1,3], [2,3,1,3,1,1], [1,1,2,1,3,3], [1,1,2,3,3,1], [1,3,2,1,3,1],
+                  [1,1,3,1,2,3], [1,1,3,3,2,1], [1,3,3,1,2,1], [3,1,3,1,2,1], [2,1,1,3,3,1],
+                  [2,3,1,1,3,1], [2,1,3,1,1,3], [2,1,3,3,1,1], [2,1,3,1,3,1], [3,1,1,1,2,3],
+                  [3,1,1,3,2,1], [3,3,1,1,2,1], [3,1,2,1,1,3], [3,1,2,3,1,1], [3,3,2,1,1,1],
+                  [3,1,4,1,1,1], [2,2,1,4,1,1], [4,3,1,1,1,1], [1,1,1,2,2,4], [1,1,1,4,2,2],
+                  [1,2,1,1,2,4], [1,2,1,4,2,1], [1,4,1,1,2,2], [1,4,1,2,2,1], [1,1,2,2,1,4],
+                  [1,1,2,4,1,2], [1,2,2,1,1,4], [1,2,2,4,1,1], [1,4,2,1,1,2], [1,4,2,2,1,1],
+                  [2,4,1,2,1,1], [2,2,1,1,1,4], [4,1,3,1,1,1], [2,4,1,1,1,2], [1,3,4,1,1,1],
+                  [1,1,1,2,4,2], [1,2,1,1,4,2], [1,2,1,2,4,1], [1,1,4,2,1,2], [1,2,4,1,1,2],
+                  [1,2,4,2,1,1], [4,1,1,2,1,2], [4,2,1,1,1,2], [4,2,1,2,1,1], [2,1,2,1,4,1],
+                  [2,1,4,1,2,1], [4,1,2,1,2,1], [1,1,1,1,4,3], [1,1,3,4,1,1], [1,1,3,1,4,1],
+                  [1,1,4,1,1,3], [1,1,4,3,1,1], [4,1,1,1,1,3], [4,1,1,3,1,1], [1,1,3,1,1,4],
+                  [1,1,4,1,3,1], [3,1,1,1,4,1], [4,1,1,1,3,1], [2,1,1,4,1,2], [2,1,1,2,1,4],
+                  [2,1,1,2,3,2], [2,3,3,1,1,1,2]
+                ];
+
+                let checksum = 104;
+                const charCodes: number[] = [];
+
                 for (let i = 0; i < code.length; i++) {
-                  const charCode = code.charCodeAt(i);
-                  bars.push((charCode % 3) + 1, ((charCode * 2) % 3) + 1, (charCode % 2) + 1, ((charCode + 1) % 3) + 1);
+                  let charVal = code.charCodeAt(i) - 32;
+                  if (charVal < 0 || charVal > 95) charVal = 0;
+                  charCodes.push(charVal);
+                  checksum += charVal * (i + 1);
                 }
-                bars.push(2, 1, 2, 2, 1);
+                checksum = checksum % 103;
 
-                let currentX = 10;
-                const height = 34;
+                const bars: number[] = [
+                  ...patterns[104],
+                  ...charCodes.flatMap((c) => patterns[c]),
+                  ...patterns[checksum],
+                  ...patterns[106],
+                ];
+                const moduleWidth = 1.5;
+                const barHeight = 36;
+                const quietZone = 12;
+                let currentX = quietZone;
+
                 const barElements: React.ReactNode[] = [];
-
-                bars.forEach((width, index) => {
+                bars.forEach((widthUnits, index) => {
                   const isBlack = index % 2 === 0;
+                  const pxWidth = widthUnits * moduleWidth;
                   if (isBlack) {
                     barElements.push(
-                      <rect key={index} x={currentX} y="0" width={width * 1.4} height={height} fill="#000000" />
+                      <rect key={index} x={currentX} y={0} width={pxWidth} height={barHeight} fill="#000000" />
                     );
                   }
-                  currentX += width * 1.4;
+                  currentX += pxWidth;
                 });
 
-                const totalWidth = currentX + 10;
+                const totalWidth = currentX + quietZone;
 
                 return (
                   <div style={{ textAlign: 'center', marginTop: 6, marginBottom: 2 }}>
-                    <svg width="100%" height="45" viewBox={`0 0 ${totalWidth} ${height + 14}`} preserveAspectRatio="xMidYMid meet">
+                    <svg width="100%" height="52" viewBox={`0 0 ${totalWidth} ${barHeight + 16}`} preserveAspectRatio="xMidYMid meet">
                       {barElements}
-                      <text x={totalWidth / 2} y={height + 11} fontSize="11" fontFamily="monospace" textAnchor="middle" fill="#000000" fontWeight="900">
+                      <text x={totalWidth / 2} y={barHeight + 12} fontSize="11" fontFamily="monospace" textAnchor="middle" fill="#000000" fontWeight="900" letterSpacing="0.5px">
                         {code}
                       </text>
                     </svg>
                   </div>
                 );
               })()}
+              {/* END BARCODE */}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
               {/* FOOTER */}
               <div style={{ textAlign: 'center', marginTop: 6, fontSize: '0.8em', color: '#000000', fontWeight: '500' }}>

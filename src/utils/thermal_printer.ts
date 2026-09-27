@@ -290,3 +290,104 @@ lines.push('\n\n\n\n');
 
 return lines.join('\n');
 }
+
+export interface GrnPrintData {
+  purchaseNo: string;
+  supplierName: string;
+  storeName?: string;
+  receivedAt: string;
+  referenceNo?: string;
+  paymentMethod: string;
+  items: {
+    name: string;
+    sku?: string;
+    quantity: number;
+    unitCost: number;
+    total: number;
+  }[];
+  subtotal: number;
+  discount?: number;
+  tax?: number;
+  freight?: number;
+  total: number;
+  paidAmount: number;
+  creditAmount: number;
+  notes?: string;
+}
+
+export function generateFormattedTextGRN(data: GrnPrintData): string {
+  const width = 48;
+  const lineSep = '-'.repeat(width);
+  const doubleSep = '='.repeat(width);
+
+  const padBetween = (left: string, right: string, w: number): string => {
+    const spaceCount = Math.max(1, w - left.length - right.length);
+    return left + ' '.repeat(spaceCount) + right;
+  };
+
+  const centerText = (text: string, w: number): string => {
+    if (text.length >= w) return text;
+    const leftPad = Math.floor((w - text.length) / 2);
+    return ' '.repeat(leftPad) + text;
+  };
+
+  const lines: string[] = [];
+
+  lines.push(centerText((data.storeName || 'NOVA POS STORE').toUpperCase(), width));
+  lines.push(centerText('GOODS RECEIVED NOTE (GRN)', width));
+  lines.push(lineSep);
+
+  const dateStr = new Date(data.receivedAt).toLocaleString('en-GB');
+
+  lines.push(`GRN No      : ${data.purchaseNo}`);
+  lines.push(`Supplier    : ${data.supplierName}`);
+  lines.push(`Date        : ${dateStr}`);
+  if (data.referenceNo) lines.push(`Ref / Inv No: ${data.referenceNo}`);
+  lines.push(`Payment     : ${data.paymentMethod}`);
+
+  lines.push(lineSep);
+  lines.push('ITEMS RECEIVED:');
+
+  data.items.forEach((item, idx) => {
+    const sn = idx + 1;
+    const qtyStr = item.quantity.toString();
+    const costStr = item.unitCost.toFixed(2);
+    const totalStr = item.total.toFixed(2);
+
+    lines.push(`${sn}. ${item.name} (${item.sku || 'N/A'})`);
+    const row2Left = `   ${qtyStr} x LKR ${costStr}`;
+    lines.push(padBetween(row2Left, `LKR ${totalStr}`, width));
+  });
+
+  lines.push(lineSep);
+
+  lines.push(padBetween('Subtotal', `LKR ${data.subtotal.toFixed(2)}`, width));
+  if (data.discount && data.discount > 0) {
+    lines.push(padBetween('Discount', `-LKR ${data.discount.toFixed(2)}`, width));
+  }
+  if (data.tax && data.tax > 0) {
+    lines.push(padBetween('Tax / VAT', `LKR ${data.tax.toFixed(2)}`, width));
+  }
+  if (data.freight && data.freight > 0) {
+    lines.push(padBetween('Freight Charges', `LKR ${data.freight.toFixed(2)}`, width));
+  }
+
+  lines.push(doubleSep);
+  lines.push(padBetween('TOTAL INVOICE', `LKR ${data.total.toFixed(2)}`, width));
+  lines.push(doubleSep);
+
+  lines.push(padBetween('Amount Paid', `LKR ${data.paidAmount.toFixed(2)}`, width));
+  lines.push(padBetween('Credit Balance', `LKR ${data.creditAmount.toFixed(2)}`, width));
+
+  if (data.notes) {
+    lines.push(lineSep);
+    lines.push(`Notes: ${data.notes}`);
+  }
+
+  lines.push(lineSep);
+  lines.push(centerText('*** STOCK RECEIVED & VERIFIED ***', width));
+  lines.push('\n\n');
+
+  return lines.join('\n');
+}
+

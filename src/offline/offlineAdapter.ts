@@ -172,6 +172,7 @@ export const offlineGetProducts = async (): Promise<PosProduct[]> => {
       unit_name: p.unit_name || p.unit || 'Pcs',
       unit: p.unit || p.unit_name || 'Pcs',
       price: Number(p.price ?? p.selling_price ?? 0),
+      cost_price: Number(p.cost_price ?? 0),
       stock,
       minimumStock,
       taxRate: Number(p.taxRate ?? p.tax_rate ?? 0),

@@ -17,7 +17,10 @@ import {
   getPosSales,
   getPosSettings,
   getPosMasterRecords,
+  getSupplierPurchases,
+  getSupplierTransactions,
   createCustomer,
+  getCustomerReturns,
   DEFAULT_POS_SETTINGS,
   updatePosDiscountRules,
   updatePosPaymentMethods,
@@ -26,6 +29,9 @@ import {
   updateCustomer,
   updateProduct,
   updatePosSale,
+  type PosSupplierTransactionRecord,
+  type PosPurchaseRecord,
+  type PosCustomerReturnRecord,
   type PosMasterRecord,
   type PosBrand,
   type PosCategory,
@@ -42,6 +48,10 @@ import AddCustomerModal, { type PosCustomer } from './AddCustomerModal';
 import AddProductModal from './AddProductModal';
 import ProductImportModal from './ProductImportModal';
 import PosResourceModal, { type ResourceField } from './PosResourceModal';
+import ReceiveSupplierStockModal from './ReceiveSupplierStockModal';
+import SupplierCreditModal from './SupplierCreditModal';
+import PurchaseGrnModal from './PurchaseGrnModal';
+import CustomerReturnModal from './CustomerReturnModal';
 
 type PosManagementSection =
   | 'products'
@@ -59,6 +69,7 @@ type PosManagementSection =
   | 'productVariants'
   | 'customers'
   | 'salesBills'
+  | 'returns'
   | 'reports'
   | 'settings';
 
@@ -104,6 +115,7 @@ const SECTIONS: Array<{ id: PosManagementSection; label: string; icon: string }>
   { id: 'productVariants', label: 'Variants', icon: 'ti-versions' },
   { id: 'customers', label: 'Customers', icon: 'ti-users' },
   { id: 'salesBills', label: 'Sales Bill Management', icon: 'ti-file-invoice' },
+  { id: 'returns', label: 'Customer Returns', icon: 'ti-rotate-2' },
   { id: 'reports', label: 'Reports', icon: 'ti-report-analytics' },
   { id: 'settings', label: 'Settings', icon: 'ti-adjustments' },
 ];
@@ -373,6 +385,19 @@ const PosManagement: React.FC = () => {
   const [stockAdjustQty, setStockAdjustQty] = useState<number>(0);
   const [stockAdjustRemarks, setStockAdjustRemarks] = useState('');
   const [isSavingStockAdjustment, setIsSavingStockAdjustment] = useState(false);
+  const [showReceiveStock, setShowReceiveStock] = useState(false);
+  const [receivingProductToSelect, setReceivingProductToSelect] = useState<PosProduct | null>(null);
+  const [supplierBalances, setSupplierBalances] = useState<Record<number, number>>({});
+  const [supplierPurchases, setSupplierPurchases] = useState<PosPurchaseRecord[]>([]);
+  const [supplierTransactions, setSupplierTransactions] = useState<PosSupplierTransactionRecord[]>([]);
+  const [creditSupplier, setCreditSupplier] = useState<PosSupplier | null>(null);
+  const [activeGrnPurchase, setActiveGrnPurchase] = useState<PosPurchaseRecord | null>(null);
+  const [stockSubTab, setStockSubTab] = useState<'inventory' | 'purchases'>('inventory');
+  const [purchaseQuery, setPurchaseQuery] = useState('');
+  const [grnSortField, setGrnSortField] = useState<'purchase_no' | 'supplier_name' | 'received_at' | 'reference_no' | 'items' | 'subtotal' | 'total_amount' | 'paid_amount' | 'credit_amount'>('received_at');
+  const [grnSortDirection, setGrnSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [grnSupplierFilter, setGrnSupplierFilter] = useState<string>('All');
+  const [grnStatusFilter, setGrnStatusFilter] = useState<'all' | 'paid' | 'credit'>('all');
 
   const [customerFilter, setCustomerFilter] = useState<'all' | 'credit' | 'zero' | 'blocked'>('all');
   const [settlingCustomer, setSettlingCustomer] = useState<PosCustomer | null>(null);
@@ -380,6 +405,21 @@ const PosManagement: React.FC = () => {
   const [settleAmount, setSettleAmount] = useState('');
   const [settleMethod, setSettleMethod] = useState<'Cash' | 'Card' | 'Bank Transfer'>('Cash');
   const [settleNotes, setSettleNotes] = useState('');
+
+  const [customerReturnsList, setCustomerReturnsList] = useState<PosCustomerReturnRecord[]>([]);
+  const [returnsSearchQuery, setReturnsSearchQuery] = useState<string>('');
+  const [showCustomerReturnModal, setShowCustomerReturnModal] = useState<boolean>(false);
+  const [customerReturnSale, setCustomerReturnSale] = useState<PosSalePayload | null>(null);
+  const [viewingReturnRecord, setViewingReturnRecord] = useState<PosCustomerReturnRecord | null>(null);
+  const [returnsSortField, setReturnsSortField] = useState<
+    'return_no' | 'invoice_number' | 'customer_name' | 'returned_at' | 'items' | 'refund_method' | 'total_refund'
+  >('returned_at');
+  const [returnsSortDirection, setReturnsSortDirection] = useState<'asc' | 'desc'>('desc');
+
+  const [salesBillSortField, setSalesBillSortField] = useState<
+    'sale_no' | 'sold_at' | 'customer_name' | 'cashier_name' | 'payment_method' | 'total_amount' | 'paid_amount' | 'status'
+  >('sold_at');
+  const [salesBillSortDirection, setSalesBillSortDirection] = useState<'asc' | 'desc'>('desc');
 
   useEffect(() => {
     let isMounted = true;
@@ -408,6 +448,9 @@ const PosManagement: React.FC = () => {
           apiSales,
           apiHeldSales,
           apiPosSettings,
+          supplierTransactions,
+          apiSupplierPurchases,
+          apiCustomerReturns,
         ] = await Promise.all([
           safeLoad(getAllProducts, []),
           safeLoad(getAllCategories, []),
@@ -418,6 +461,9 @@ const PosManagement: React.FC = () => {
           safeLoad(() => getPosSales(), []),
           safeLoad(() => getPosSales('held'), []),
           safeLoad(getPosSettings, DEFAULT_POS_SETTINGS),
+          safeLoad(getSupplierTransactions, [] as PosSupplierTransactionRecord[]),
+          safeLoad(getSupplierPurchases, [] as PosPurchaseRecord[]),
+          safeLoad(() => getCustomerReturns(), [] as PosCustomerReturnRecord[]),
         ]);
         const resourceResults = await Promise.all(
           Object.values(RESOURCE_META).map(async (resource) => {
@@ -441,6 +487,14 @@ const PosManagement: React.FC = () => {
           setSalesReportRows(apiSales);
           setHeldReportRows(apiHeldSales);
           setPosSettings(apiPosSettings);
+          setSupplierTransactions(supplierTransactions);
+          setSupplierPurchases(apiSupplierPurchases);
+          setCustomerReturnsList(apiCustomerReturns);
+          setSupplierBalances(supplierTransactions.reduce<Record<number, number>>((balances, transaction) => {
+            const signedAmount = transaction.type === 'purchase' ? transaction.amount : -transaction.amount;
+            balances[transaction.supplier_id] = (balances[transaction.supplier_id] || 0) + signedAmount;
+            return balances;
+          }, {}));
           setResourceRows(Object.fromEntries(resourceResults) as Record<ManagedResourceId, PosMasterRecord[]>);
           if (hadLoadError) {
             setLoadError('Some POS management data could not be loaded from the backend.');
@@ -2060,14 +2114,108 @@ const PosManagement: React.FC = () => {
     const outOfStockCount = products.filter((p) => p.stock <= 0).length;
     const totalValuation = products.reduce((sum, p) => sum + p.price * p.stock, 0);
 
+    const handleGrnSort = (field: typeof grnSortField) => {
+      if (grnSortField === field) {
+        setGrnSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+      } else {
+        setGrnSortField(field);
+        setGrnSortDirection('desc');
+      }
+    };
+
+    const renderGrnSortIndicator = (field: typeof grnSortField) => {
+      if (grnSortField !== field) {
+        return <i className="ti ti-arrows-sort" style={{ opacity: 0.35, marginLeft: 4, fontSize: 12 }} aria-hidden="true" />;
+      }
+      return grnSortDirection === 'asc' ? (
+        <i className="ti ti-arrow-up" style={{ color: 'var(--app-accent, #27AE4F)', marginLeft: 4, fontSize: 12 }} aria-hidden="true" />
+      ) : (
+        <i className="ti ti-arrow-down" style={{ color: 'var(--app-accent, #27AE4F)', marginLeft: 4, fontSize: 12 }} aria-hidden="true" />
+      );
+    };
+
+    const sortedPurchases = supplierPurchases.filter((p) => {
+      const q = purchaseQuery.trim().toLowerCase();
+      if (grnSupplierFilter !== 'All' && String(p.supplier_id) !== grnSupplierFilter) return false;
+      if (grnStatusFilter === 'credit' && p.credit_amount <= 0) return false;
+      if (grnStatusFilter === 'paid' && p.credit_amount > 0) return false;
+      if (!q) return true;
+      return (
+        p.purchase_no.toLowerCase().includes(q) ||
+        p.supplier_name.toLowerCase().includes(q) ||
+        (p.reference_no && p.reference_no.toLowerCase().includes(q)) ||
+        (p.notes && p.notes.toLowerCase().includes(q))
+      );
+    }).sort((a, b) => {
+      let aVal: any;
+      let bVal: any;
+
+      switch (grnSortField) {
+        case 'purchase_no':
+          aVal = a.purchase_no;
+          bVal = b.purchase_no;
+          break;
+        case 'supplier_name':
+          aVal = a.supplier_name.toLowerCase();
+          bVal = b.supplier_name.toLowerCase();
+          break;
+        case 'received_at':
+          aVal = new Date(a.received_at).getTime();
+          bVal = new Date(b.received_at).getTime();
+          break;
+        case 'reference_no':
+          aVal = (a.reference_no || '').toLowerCase();
+          bVal = (b.reference_no || '').toLowerCase();
+          break;
+        case 'items':
+          aVal = a.lines.length;
+          bVal = b.lines.length;
+          break;
+        case 'subtotal':
+          aVal = a.subtotal;
+          bVal = b.subtotal;
+          break;
+        case 'total_amount':
+          aVal = a.total_amount;
+          bVal = b.total_amount;
+          break;
+        case 'paid_amount':
+          aVal = a.paid_amount;
+          bVal = b.paid_amount;
+          break;
+        case 'credit_amount':
+          aVal = a.credit_amount;
+          bVal = b.credit_amount;
+          break;
+        default:
+          aVal = new Date(a.received_at).getTime();
+          bVal = new Date(b.received_at).getTime();
+      }
+
+      if (aVal < bVal) return grnSortDirection === 'asc' ? -1 : 1;
+      if (aVal > bVal) return grnSortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+
     return (
       <section style={styles.panel}>
         <div style={styles.panelHeader}>
           <div>
             <h2 style={styles.panelTitle}>Stock Management</h2>
-            <p style={styles.panelSub}>Monitor inventory stock levels, track low stock alerts, and perform stock adjustments.</p>
+            <p style={styles.panelSub}>Monitor inventory stock levels, track low stock alerts, receive supplier stock, and audit GRN receipts.</p>
           </div>
           <div style={styles.headerButtonGroup}>
+            <button
+              style={styles.primaryBtn}
+              onClick={() => {
+                setReceivingProductToSelect(null);
+                setShowReceiveStock(true);
+              }}
+              title="Receive stock from a supplier"
+            >
+              <i className="ti ti-package-import" aria-hidden="true" />
+              Receive Stock
+            </button>
             <button
               style={styles.secondaryBtn}
               onClick={() => exportProductsToExcel(stockFilteredProducts.length ? stockFilteredProducts : products)}
@@ -2085,6 +2233,32 @@ const PosManagement: React.FC = () => {
               Stock Movements Log
             </button>
           </div>
+        </div>
+
+        {/* Sub Navigation Segment */}
+        <div style={styles.segmentRow}>
+          <button
+            type="button"
+            style={{
+              ...styles.segmentBtn,
+              ...(stockSubTab === 'inventory' ? styles.segmentBtnActive : {}),
+            }}
+            onClick={() => setStockSubTab('inventory')}
+          >
+            <i className="ti ti-packages" aria-hidden="true" />
+            Inventory Stock ({products.length})
+          </button>
+          <button
+            type="button"
+            style={{
+              ...styles.segmentBtn,
+              ...(stockSubTab === 'purchases' ? styles.segmentBtnActive : {}),
+            }}
+            onClick={() => setStockSubTab('purchases')}
+          >
+            <i className="ti ti-receipt-2" aria-hidden="true" />
+            Supplier Stock Receipts (GRN) ({supplierPurchases.length})
+          </button>
         </div>
 
         <div style={styles.miniStatsGrid}>
@@ -2110,232 +2284,556 @@ const PosManagement: React.FC = () => {
           </div>
         </div>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', marginBottom: 16 }}>
-          <div style={{ ...styles.searchRow, flex: 1, minWidth: 260, margin: 0 }}>
-            <i className="ti ti-search" aria-hidden="true" />
-            <input
-              style={styles.searchInput}
-              value={stockQuery}
-              onChange={(e) => setStockQuery(e.target.value)}
-              placeholder="Search product by name, code, barcode..."
-            />
-          </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', margin: '0 16px 14px', padding: '9px 11px', borderRadius: 8, background: 'var(--app-accent-soft, rgba(39,174,79,0.08))', color: 'var(--app-muted)', fontSize: 12 }}>
+          <strong style={{ color: 'var(--app-text-strong)' }}>Supplier credit:</strong>
+          {suppliers.filter((supplier) => (supplierBalances[supplier.id] || 0) > 0).length === 0 ? (
+            <span>No outstanding supplier credit</span>
+          ) : suppliers.filter((supplier) => (supplierBalances[supplier.id] || 0) > 0).map((supplier) => (
+            <button
+              key={supplier.id}
+              type="button"
+              onClick={() => setCreditSupplier(supplier)}
+              style={styles.supplierCreditButton}
+              title={`View invoices and pay ${supplier.name}`}
+            >
+              {supplier.name}: <strong>{formatMoney(supplierBalances[supplier.id])}</strong>
+              <i className="ti ti-arrow-up-right" aria-hidden="true" />
+            </button>
+          ))}
+        </div>
 
-          <select
-            style={{
-              padding: '10px 14px',
-              borderRadius: 8,
-              border: '1px solid var(--app-border, #d0d5dd)',
-              background: 'var(--app-input-bg, #ffffff)',
-              color: 'var(--app-input-text, #1f2937)',
-              fontSize: 13,
-              fontWeight: 600,
-              outline: 'none',
-              cursor: 'pointer',
-            }}
-            value={stockCategoryFilter}
-            onChange={(e) => setStockCategoryFilter(e.target.value)}
-          >
-            <option value="All">All Categories ({categories.length})</option>
-            {categories.map((cat) => (
-              <option key={cat.id} value={cat.name}>
-                {cat.name}
-              </option>
-            ))}
-          </select>
+        {stockSubTab === 'purchases' ? (
+          <>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', marginBottom: 16 }}>
+              <div style={{ ...styles.searchRow, flex: 1, minWidth: 240, margin: 0 }}>
+                <i className="ti ti-search" aria-hidden="true" />
+                <input
+                  style={styles.searchInput}
+                  value={purchaseQuery}
+                  onChange={(e) => setPurchaseQuery(e.target.value)}
+                  placeholder="Search GRN #, Supplier name, or Invoice reference..."
+                />
+              </div>
 
-          <div style={{ display: 'flex', gap: 6, background: 'var(--app-surface-soft, #f9fafb)', padding: 3, borderRadius: 8, border: '1px solid var(--app-border, #d0d5dd)' }}>
-            {(['All', 'In', 'Low', 'Out'] as const).map((filterOpt) => (
-              <button
-                key={filterOpt}
-                type="button"
-                onClick={() => setStockStatusFilter(filterOpt)}
+              {/* Filter Supplier */}
+              <select
                 style={{
-                  border: 'none',
-                  borderRadius: 6,
-                  padding: '6px 12px',
+                  padding: '9px 12px',
+                  borderRadius: 8,
+                  border: '1px solid var(--app-border, #d0d5dd)',
+                  background: 'var(--app-input-bg, #ffffff)',
+                  color: 'var(--app-input-text, #1f2937)',
                   fontSize: 12,
-                  fontWeight: 700,
+                  fontWeight: 600,
+                  outline: 'none',
                   cursor: 'pointer',
-                  background: stockStatusFilter === filterOpt ? 'var(--app-accent, #27AE4F)' : 'transparent',
-                  color: stockStatusFilter === filterOpt ? '#ffffff' : 'var(--app-muted, #667085)',
-                  transition: 'all 0.15s ease',
                 }}
+                value={grnSupplierFilter}
+                onChange={(e) => setGrnSupplierFilter(e.target.value)}
+                title="Filter GRNs by supplier"
               >
-                {filterOpt === 'All' && 'All Items'}
-                {filterOpt === 'In' && `In Stock (${inStockCount})`}
-                {filterOpt === 'Low' && `Low Stock (${lowStockCount})`}
-                {filterOpt === 'Out' && `Out of Stock (${outOfStockCount})`}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div style={styles.tableWrap}>
-          <table style={{ ...styles.table, minWidth: 1220 }}>
-            <colgroup>
-              <col style={{ width: 125 }} />
-              <col style={{ width: 240 }} />
-              <col style={{ width: 150 }} />
-              <col style={{ width: 115 }} />
-              <col style={{ width: 105 }} />
-              <col style={{ width: 145 }} />
-              <col style={{ width: 100 }} />
-              <col style={{ width: 135 }} />
-              <col style={{ width: 155 }} />
-              <col style={{ width: 180 }} />
-            </colgroup>
-            <thead>
-              <tr>
-                {['Code / SKU', 'Product Name', 'Category', 'Current Stock', 'Min Stock', 'Unit', 'Price', 'Stock Value', 'Stock Status', 'Quick Actions'].map((heading, index) => (
-                  <th key={heading} style={{ ...styles.th, ...(index === 0 ? { position: 'sticky', left: 0, zIndex: 12 } : {}) }}>{heading}</th>
+                <option value="All">All Suppliers ({suppliers.length})</option>
+                {suppliers.map((s) => (
+                  <option key={s.id} value={String(s.id)}>
+                    {s.name}
+                  </option>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {stockFilteredProducts.map((product) => {
-                const isOut = product.stock <= 0;
-                const isLow = !isOut && product.stock <= product.minimumStock;
-                const statusLabel = isOut ? 'Out of Stock' : isLow ? 'Low Stock Alert' : 'In Stock';
-                const statusStyle = isOut
-                  ? { background: 'rgba(239, 68, 68, 0.15)', color: 'var(--app-danger, #b42318)', border: '1px solid rgba(239, 68, 68, 0.3)' }
-                  : isLow
-                    ? { background: 'rgba(245, 158, 11, 0.15)', color: 'var(--app-warning, #946200)', border: '1px solid rgba(245, 158, 11, 0.3)' }
-                    : { background: 'rgba(39, 174, 79, 0.15)', color: 'var(--app-accent, #27AE4F)', border: '1px solid rgba(39, 174, 79, 0.3)' };
+              </select>
 
-                return (
-                  <tr key={product.id} style={styles.tr}>
-                    <td style={{ ...styles.tdMuted, whiteSpace: 'normal', overflowWrap: 'anywhere', position: 'sticky', left: 0, zIndex: 5, background: 'var(--app-surface)' }}>{product.sku}</td>
-                    <td style={{ ...styles.td, width: 240, maxWidth: 240, overflowWrap: 'anywhere' }}>
-                      <strong style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.3 }}>{product.name}</strong>
-                      <div style={styles.cellSubText}>{product.barcode || 'No barcode'}</div>
-                    </td>
-                    <td style={styles.td}>{product.category}</td>
-                    <td style={styles.td}>
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          minWidth: 38,
-                          padding: '4px 10px',
-                          borderRadius: 8,
-                          fontSize: 14,
-                          fontWeight: 800,
-                          color: '#ffffff',
-                          background: isOut ? '#EF4444' : isLow ? '#F59E0B' : '#27AE4F',
-                          boxShadow: '0 2px 6px rgba(0, 0, 0, 0.15)',
-                        }}
-                      >
-                        {product.stock}
-                      </span>
-                    </td>
-                    <td style={styles.tdMuted}>{product.minimumStock}</td>
-                    <td style={styles.td}>{getProductUnitName(product)}</td>
-                    <td style={styles.td}>{formatMoney(product.price)}</td>
-                    <td style={styles.td}>
-                      <strong>{formatMoney(product.price * product.stock)}</strong>
-                    </td>
-                    <td style={styles.td}>
-                      <span style={{ display: 'inline-flex', padding: '3px 9px', borderRadius: 999, fontSize: 11, fontWeight: 800, ...statusStyle }}>
-                        {statusLabel}
-                      </span>
-                    </td>
-                    <td style={styles.td}>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button
-                          type="button"
-                          style={{
-                            border: '1px solid var(--app-border, #d0d5dd)',
-                            borderRadius: 6,
-                            padding: '4px 8px',
-                            fontSize: 12,
-                            fontWeight: 700,
-                            background: 'rgba(39, 174, 79, 0.12)',
-                            color: 'var(--app-accent-strong, #16834f)',
-                            cursor: 'pointer',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                          }}
-                          onClick={() => {
-                            setStockAdjustProduct(product);
-                            setStockAdjustMode('add');
-                            setStockAdjustQty(10);
-                            setStockAdjustRemarks('');
-                          }}
-                          title="Add Stock (+)"
-                        >
-                          <i className="ti ti-plus" aria-hidden="true" />
-                          In
-                        </button>
-                        <button
-                          type="button"
-                          style={{
-                            border: '1px solid var(--app-border, #d0d5dd)',
-                            borderRadius: 6,
-                            padding: '4px 8px',
-                            fontSize: 12,
-                            fontWeight: 700,
-                            background: 'rgba(239, 68, 68, 0.12)',
-                            color: 'var(--app-danger, #b42318)',
-                            cursor: 'pointer',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                          }}
-                          onClick={() => {
-                            setStockAdjustProduct(product);
-                            setStockAdjustMode('remove');
-                            setStockAdjustQty(1);
-                            setStockAdjustRemarks('');
-                          }}
-                          title="Reduce Stock (-)"
-                        >
-                          <i className="ti ti-minus" aria-hidden="true" />
-                          Out
-                        </button>
-                        <button
-                          type="button"
-                          style={{
-                            border: '1px solid var(--app-border, #d0d5dd)',
-                            borderRadius: 6,
-                            padding: '4px 8px',
-                            fontSize: 12,
-                            fontWeight: 700,
-                            background: 'var(--app-button-bg, #ffffff)',
-                            color: 'var(--app-button-text, #344054)',
-                            cursor: 'pointer',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                          }}
-                          onClick={() => {
-                            setStockAdjustProduct(product);
-                            setStockAdjustMode('set');
-                            setStockAdjustQty(product.stock);
-                            setStockAdjustRemarks('');
-                          }}
-                          title="Set Exact Quantity"
-                        >
-                          <i className="ti ti-adjustments" aria-hidden="true" />
+              {/* Status Filter */}
+              <div style={{ display: 'flex', gap: 4, background: 'var(--app-surface-soft, #f9fafb)', padding: 3, borderRadius: 8, border: '1px solid var(--app-border, #d0d5dd)' }}>
+                {(['all', 'paid', 'credit'] as const).map((filterOpt) => (
+                  <button
+                    key={filterOpt}
+                    type="button"
+                    onClick={() => setGrnStatusFilter(filterOpt)}
+                    style={{
+                      border: 'none',
+                      borderRadius: 6,
+                      padding: '5px 10px',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      background: grnStatusFilter === filterOpt ? 'var(--app-accent, #27AE4F)' : 'transparent',
+                      color: grnStatusFilter === filterOpt ? '#ffffff' : 'var(--app-muted, #667085)',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    {filterOpt === 'all' && 'All GRNs'}
+                    {filterOpt === 'paid' && 'Fully Paid'}
+                    {filterOpt === 'credit' && 'Credit Outstanding'}
+                  </button>
+                ))}
+              </div>
 
-                        </button>
-                      </div>
-                    </td>
+              {/* Arrange / Sort Control Group */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--app-surface-soft, #f8fafc)', padding: '4px 8px', borderRadius: 8, border: '1px solid var(--app-border, #d0d5dd)' }}>
+                <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--app-muted)', textTransform: 'uppercase' }}>Arrange by:</span>
+                <select
+                  style={{
+                    padding: '5px 8px',
+                    borderRadius: 6,
+                    border: '1px solid var(--app-border, #d0d5dd)',
+                    background: 'var(--app-surface, #ffffff)',
+                    color: 'var(--app-text, #1f2937)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    outline: 'none',
+                    cursor: 'pointer',
+                  }}
+                  value={grnSortField}
+                  onChange={(e) => setGrnSortField(e.target.value as any)}
+                >
+                  <option value="received_at">Received Date</option>
+                  <option value="purchase_no">GRN Number</option>
+                  <option value="supplier_name">Supplier Name</option>
+                  <option value="reference_no">Ref / Invoice No</option>
+                  <option value="items">Item Count</option>
+                  <option value="subtotal">Subtotal</option>
+                  <option value="total_amount">Net Invoice Total</option>
+                  <option value="paid_amount">Paid Amount</option>
+                  <option value="credit_amount">Credit Balance</option>
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => setGrnSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+                  style={{
+                    border: '1px solid var(--app-border, #d0d5dd)',
+                    borderRadius: 6,
+                    padding: '4px 8px',
+                    background: 'var(--app-surface, #ffffff)',
+                    color: 'var(--app-text, #1f2937)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                  title={`Sort ${grnSortDirection === 'asc' ? 'Ascending (A-Z, 0-9)' : 'Descending (Z-A, 9-0)'}`}
+                >
+                  <i className={grnSortDirection === 'asc' ? 'ti ti-sort-ascending' : 'ti ti-sort-descending'} aria-hidden="true" />
+                  {grnSortDirection === 'asc' ? 'ASC' : 'DESC'}
+                </button>
+              </div>
+            </div>
+
+            <div style={styles.tableWrap}>
+              <table style={{ width: '100%', minWidth: 1540, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                <colgroup>
+                  <col style={{ width: 190 }} />
+                  <col style={{ width: 240 }} />
+                  <col style={{ width: 175 }} />
+                  <col style={{ width: 150 }} />
+                  <col style={{ width: 90 }} />
+                  <col style={{ width: 130 }} />
+                  <col style={{ width: 140 }} />
+                  <col style={{ width: 135 }} />
+                  <col style={{ width: 140 }} />
+                  <col style={{ width: 150 }} />
+                </colgroup>
+                <thead>
+                  <tr style={{ background: 'var(--app-surface-soft, #f1f5f9)', borderBottom: '2px solid var(--app-border, #cbd5e1)' }}>
+                    <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleGrnSort('purchase_no')}>
+                      GRN No {renderGrnSortIndicator('purchase_no')}
+                    </th>
+                    <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleGrnSort('supplier_name')}>
+                      Supplier Name {renderGrnSortIndicator('supplier_name')}
+                    </th>
+                    <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleGrnSort('received_at')}>
+                      Received Date {renderGrnSortIndicator('received_at')}
+                    </th>
+                    <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleGrnSort('reference_no')}>
+                      Ref / Invoice No {renderGrnSortIndicator('reference_no')}
+                    </th>
+                    <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', textAlign: 'center', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleGrnSort('items')}>
+                      Items {renderGrnSortIndicator('items')}
+                    </th>
+                    <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleGrnSort('subtotal')}>
+                      Subtotal {renderGrnSortIndicator('subtotal')}
+                    </th>
+                    <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleGrnSort('total_amount')}>
+                      Net Total {renderGrnSortIndicator('total_amount')}
+                    </th>
+                    <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleGrnSort('paid_amount')}>
+                      Paid Amount {renderGrnSortIndicator('paid_amount')}
+                    </th>
+                    <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleGrnSort('credit_amount')}>
+                      Credit Balance {renderGrnSortIndicator('credit_amount')}
+                    </th>
+                    <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', textAlign: 'center' }}>Actions</th>
                   </tr>
-                );
-              })}
-              {stockFilteredProducts.length === 0 && (
-                <tr>
-                  <td style={styles.emptyCell} colSpan={10}>
-                    No products match the selected stock filter.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+                <tbody>
+                  {sortedPurchases.map((purchase) => (
+                    <tr key={purchase.id || purchase.purchase_no} style={{ borderBottom: '1px solid var(--app-border-soft, #e2e8f0)', background: 'var(--app-surface, #ffffff)' }}>
+                      <td style={{ padding: '14px 14px', verticalAlign: 'middle', whiteSpace: 'nowrap' }}>
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            padding: '4px 9px',
+                            borderRadius: 6,
+                            background: 'var(--app-surface-soft, #f1f5f9)',
+                            border: '1px solid var(--app-border, #d0d5dd)',
+                            fontWeight: 800,
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                            letterSpacing: '0.02em',
+                            color: 'var(--app-text-strong, #0f172a)',
+                          }}
+                        >
+                          {purchase.purchase_no}
+                        </span>
+                      </td>
+                      <td style={{ padding: '14px 14px', verticalAlign: 'middle', whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.4 }}>
+                        <strong style={{ display: 'block', fontSize: 13, color: 'var(--app-text-strong, #0f172a)' }}>{purchase.supplier_name}</strong>
+                      </td>
+                      <td style={{ padding: '14px 14px', verticalAlign: 'middle', whiteSpace: 'nowrap', fontSize: 12, color: 'var(--app-muted, #64748b)' }}>
+                        {new Date(purchase.received_at).toLocaleString('en-LK')}
+                      </td>
+                      <td style={{ padding: '14px 14px', verticalAlign: 'middle', whiteSpace: 'nowrap', fontSize: 12, color: 'var(--app-muted, #64748b)' }}>
+                        {purchase.reference_no ? (
+                          <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{purchase.reference_no}</span>
+                        ) : (
+                          <span style={{ fontStyle: 'italic', opacity: 0.7 }}>N/A</span>
+                        )}
+                      </td>
+                      <td style={{ padding: '14px 14px', verticalAlign: 'middle', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                        <span style={styles.badge}>{purchase.lines.length} items</span>
+                      </td>
+                      <td style={{ padding: '14px 14px', verticalAlign: 'middle', textAlign: 'right', whiteSpace: 'nowrap', fontSize: 13 }}>
+                        {formatMoney(purchase.subtotal)}
+                      </td>
+                      <td style={{ padding: '14px 14px', verticalAlign: 'middle', textAlign: 'right', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 800 }}>
+                        {formatMoney(purchase.total_amount)}
+                      </td>
+                      <td style={{ padding: '14px 14px', verticalAlign: 'middle', textAlign: 'right', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 700, color: '#16834f' }}>
+                        {formatMoney(purchase.paid_amount)}
+                      </td>
+                      <td style={{ padding: '14px 14px', verticalAlign: 'middle', textAlign: 'right', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 800 }}>
+                        <span style={{ color: purchase.credit_amount > 0 ? '#b42318' : '#16834f' }}>
+                          {formatMoney(purchase.credit_amount)}
+                        </span>
+                      </td>
+                      <td style={{ padding: '14px 14px', verticalAlign: 'middle', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+                          <button
+                            type="button"
+                            style={{
+                              border: '1px solid var(--app-border, #d0d5dd)',
+                              borderRadius: 6,
+                              padding: '5px 9px',
+                              fontSize: 12,
+                              fontWeight: 700,
+                              background: 'var(--app-button-bg, #ffffff)',
+                              color: 'var(--app-button-text, #344054)',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                            onClick={() => setActiveGrnPurchase(purchase)}
+                            title="View & Print GRN Document"
+                          >
+                            <i className="ti ti-printer" aria-hidden="true" />
+                            GRN
+                          </button>
+
+                          {purchase.credit_amount > 0 && (
+                            <button
+                              type="button"
+                              style={{
+                                border: 'none',
+                                borderRadius: 6,
+                                padding: '5px 9px',
+                                fontSize: 12,
+                                fontWeight: 700,
+                                background: 'var(--app-accent, #27AE4F)',
+                                color: '#ffffff',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                              }}
+                              onClick={() => {
+                                const sup = suppliers.find((s) => s.id === purchase.supplier_id);
+                                if (sup) setCreditSupplier(sup);
+                              }}
+                              title="Pay Supplier Credit"
+                            >
+                              <i className="ti ti-wallet" aria-hidden="true" />
+                              Pay
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {sortedPurchases.length === 0 && (
+                    <tr>
+                      <td style={styles.emptyCell} colSpan={10}>
+                        No supplier stock receipt GRNs found matching current criteria.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', marginBottom: 16 }}>
+              <div style={{ ...styles.searchRow, flex: 1, minWidth: 260, margin: 0 }}>
+                <i className="ti ti-search" aria-hidden="true" />
+                <input
+                  style={styles.searchInput}
+                  value={stockQuery}
+                  onChange={(e) => setStockQuery(e.target.value)}
+                  placeholder="Search product by name, code, barcode..."
+                />
+              </div>
+
+              <select
+                style={{
+                  padding: '10px 14px',
+                  borderRadius: 8,
+                  border: '1px solid var(--app-border, #d0d5dd)',
+                  background: 'var(--app-input-bg, #ffffff)',
+                  color: 'var(--app-input-text, #1f2937)',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  outline: 'none',
+                  cursor: 'pointer',
+                }}
+                value={stockCategoryFilter}
+                onChange={(e) => setStockCategoryFilter(e.target.value)}
+              >
+                <option value="All">All Categories ({categories.length})</option>
+                {categories.map((cat) => (
+                  <option key={cat.id} value={cat.name}>
+                    {cat.name}
+                  </option>
+                ))}
+              </select>
+
+              <div style={{ display: 'flex', gap: 6, background: 'var(--app-surface-soft, #f9fafb)', padding: 3, borderRadius: 8, border: '1px solid var(--app-border, #d0d5dd)' }}>
+                {(['All', 'In', 'Low', 'Out'] as const).map((filterOpt) => (
+                  <button
+                    key={filterOpt}
+                    type="button"
+                    onClick={() => setStockStatusFilter(filterOpt)}
+                    style={{
+                      border: 'none',
+                      borderRadius: 6,
+                      padding: '6px 12px',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      background: stockStatusFilter === filterOpt ? 'var(--app-accent, #27AE4F)' : 'transparent',
+                      color: stockStatusFilter === filterOpt ? '#ffffff' : 'var(--app-muted, #667085)',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    {filterOpt === 'All' && 'All Items'}
+                    {filterOpt === 'In' && `In Stock (${inStockCount})`}
+                    {filterOpt === 'Low' && `Low Stock (${lowStockCount})`}
+                    {filterOpt === 'Out' && `Out of Stock (${outOfStockCount})`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={styles.tableWrap}>
+              <table style={{ ...styles.table, minWidth: 1220 }}>
+                <colgroup>
+                  <col style={{ width: 125 }} />
+                  <col style={{ width: 240 }} />
+                  <col style={{ width: 150 }} />
+                  <col style={{ width: 115 }} />
+                  <col style={{ width: 105 }} />
+                  <col style={{ width: 145 }} />
+                  <col style={{ width: 100 }} />
+                  <col style={{ width: 135 }} />
+                  <col style={{ width: 155 }} />
+                  <col style={{ width: 250 }} />
+                </colgroup>
+                <thead>
+                  <tr>
+                    {['Code / SKU', 'Product Name', 'Category', 'Current Stock', 'Min Stock', 'Unit', 'Price', 'Stock Value', 'Stock Status', 'Quick Actions'].map((heading, index) => (
+                      <th key={heading} style={{ ...styles.th, ...(index === 0 ? { position: 'sticky', left: 0, zIndex: 12 } : {}) }}>{heading}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {stockFilteredProducts.map((product) => {
+                    const isOut = product.stock <= 0;
+                    const isLow = !isOut && product.stock <= product.minimumStock;
+                    const statusLabel = isOut ? 'Out of Stock' : isLow ? 'Low Stock Alert' : 'In Stock';
+                    const statusStyle = isOut
+                      ? { background: 'rgba(239, 68, 68, 0.15)', color: 'var(--app-danger, #b42318)', border: '1px solid rgba(239, 68, 68, 0.3)' }
+                      : isLow
+                        ? { background: 'rgba(245, 158, 11, 0.15)', color: 'var(--app-warning, #946200)', border: '1px solid rgba(245, 158, 11, 0.3)' }
+                        : { background: 'rgba(39, 174, 79, 0.15)', color: 'var(--app-accent, #27AE4F)', border: '1px solid rgba(39, 174, 79, 0.3)' };
+
+                    return (
+                      <tr key={product.id} style={styles.tr}>
+                        <td style={{ ...styles.tdMuted, whiteSpace: 'normal', overflowWrap: 'anywhere', position: 'sticky', left: 0, zIndex: 5, background: 'var(--app-surface)' }}>{product.sku}</td>
+                        <td style={{ ...styles.td, width: 240, maxWidth: 240, overflowWrap: 'anywhere' }}>
+                          <strong style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.3 }}>{product.name}</strong>
+                          <div style={styles.cellSubText}>{product.barcode || 'No barcode'}</div>
+                        </td>
+                        <td style={styles.td}>{product.category}</td>
+                        <td style={styles.td}>
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              minWidth: 38,
+                              padding: '4px 10px',
+                              borderRadius: 8,
+                              fontSize: 14,
+                              fontWeight: 800,
+                              color: '#ffffff',
+                              background: isOut ? '#EF4444' : isLow ? '#F59E0B' : '#27AE4F',
+                              boxShadow: '0 2px 6px rgba(0, 0, 0, 0.15)',
+                            }}
+                          >
+                            {product.stock}
+                          </span>
+                        </td>
+                        <td style={styles.tdMuted}>{product.minimumStock}</td>
+                        <td style={styles.td}>{getProductUnitName(product)}</td>
+                        <td style={styles.td}>{formatMoney(product.price)}</td>
+                        <td style={styles.td}>
+                          <strong>{formatMoney(product.price * product.stock)}</strong>
+                        </td>
+                        <td style={styles.td}>
+                          <span style={{ display: 'inline-flex', padding: '3px 9px', borderRadius: 999, fontSize: 11, fontWeight: 800, ...statusStyle }}>
+                            {statusLabel}
+                          </span>
+                        </td>
+                        <td style={styles.td}>
+                          <div style={{ display: 'flex', gap: 5 }}>
+                            <button
+                              type="button"
+                              style={{
+                                border: '1px solid var(--app-accent, #27AE4F)',
+                                borderRadius: 6,
+                                padding: '4px 8px',
+                                fontSize: 12,
+                                fontWeight: 700,
+                                background: 'var(--app-accent-soft, rgba(39,174,79,0.1))',
+                                color: 'var(--app-accent-strong, #16834f)',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 3,
+                              }}
+                              onClick={() => {
+                                setReceivingProductToSelect(product);
+                                setShowReceiveStock(true);
+                              }}
+                              title="Receive stock for this product"
+                            >
+                              <i className="ti ti-package-import" aria-hidden="true" />
+                              Receive
+                            </button>
+                            <button
+                              type="button"
+                              style={{
+                                border: '1px solid var(--app-border, #d0d5dd)',
+                                borderRadius: 6,
+                                padding: '4px 8px',
+                                fontSize: 12,
+                                fontWeight: 700,
+                                background: 'rgba(39, 174, 79, 0.12)',
+                                color: 'var(--app-accent-strong, #16834f)',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 3,
+                              }}
+                              onClick={() => {
+                                setStockAdjustProduct(product);
+                                setStockAdjustMode('add');
+                                setStockAdjustQty(10);
+                                setStockAdjustRemarks('');
+                              }}
+                              title="Add Stock (+)"
+                            >
+                              <i className="ti ti-plus" aria-hidden="true" />
+                              In
+                            </button>
+                            <button
+                              type="button"
+                              style={{
+                                border: '1px solid var(--app-border, #d0d5dd)',
+                                borderRadius: 6,
+                                padding: '4px 8px',
+                                fontSize: 12,
+                                fontWeight: 700,
+                                background: 'rgba(239, 68, 68, 0.12)',
+                                color: 'var(--app-danger, #b42318)',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 3,
+                              }}
+                              onClick={() => {
+                                setStockAdjustProduct(product);
+                                setStockAdjustMode('remove');
+                                setStockAdjustQty(1);
+                                setStockAdjustRemarks('');
+                              }}
+                              title="Reduce Stock (-)"
+                            >
+                              <i className="ti ti-minus" aria-hidden="true" />
+                              Out
+                            </button>
+                            <button
+                              type="button"
+                              style={{
+                                border: '1px solid var(--app-border, #d0d5dd)',
+                                borderRadius: 6,
+                                padding: '4px 8px',
+                                fontSize: 12,
+                                fontWeight: 700,
+                                background: 'var(--app-button-bg, #ffffff)',
+                                color: 'var(--app-button-text, #344054)',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 3,
+                              }}
+                              onClick={() => {
+                                setStockAdjustProduct(product);
+                                setStockAdjustMode('set');
+                                setStockAdjustQty(product.stock);
+                                setStockAdjustRemarks('');
+                              }}
+                              title="Set Exact Quantity"
+                            >
+                              <i className="ti ti-adjustments" aria-hidden="true" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {stockFilteredProducts.length === 0 && (
+                    <tr>
+                      <td style={styles.emptyCell} colSpan={10}>
+                        No products match the selected stock filter.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </section>
     );
   };
@@ -2475,7 +2973,56 @@ const PosManagement: React.FC = () => {
       { id: 'credit', label: 'Credit', icon: 'ti-user-credit-card' },
     ];
 
+    const calculateTableTotalsRow = (headers: string[], rows: (string | number)[][]): string[] => {
+      if (!rows.length) return headers.map((_, i) => (i === 0 ? 'TOTAL (0 ITEMS)' : '-'));
+
+      const totals: string[] = headers.map((_, i) => (i === 0 ? `TOTAL (${rows.length} ITEMS)` : '-'));
+
+      for (let colIdx = 1; colIdx < headers.length; colIdx++) {
+        let isCurrency = false;
+        let isPercent = false;
+        let numericCount = 0;
+        let sum = 0;
+
+        for (const row of rows) {
+          const val = row[colIdx];
+          if (val === undefined || val === null || val === '' || val === '-') continue;
+
+          const strVal = String(val).trim();
+          if (strVal.includes('LKR') || strVal.includes('$') || strVal.includes('Rs')) {
+            isCurrency = true;
+          }
+          if (strVal.includes('%')) {
+            isPercent = true;
+          }
+
+          const cleaned = strVal.replace(/[^0-9.-]+/g, '');
+          const num = parseFloat(cleaned);
+          if (!isNaN(num) && /[0-9]/.test(strVal)) {
+            numericCount++;
+            sum += num;
+          }
+        }
+
+        if (numericCount > 0 && numericCount >= Math.floor(rows.length * 0.3)) {
+          if (isCurrency) {
+            totals[colIdx] = formatMoney(sum);
+          } else if (isPercent) {
+            totals[colIdx] = `${(sum / numericCount).toFixed(1)}% (Avg)`;
+          } else if (Number.isInteger(sum)) {
+            totals[colIdx] = sum.toLocaleString('en-US');
+          } else {
+            totals[colIdx] = sum.toLocaleString('en-US', { maximumFractionDigits: 2 });
+          }
+        }
+      }
+
+      return totals;
+    };
+
     const exportReportToCsv = (title: string, headers: string[], rows: (string | number)[][]) => {
+      const totalsRow = calculateTableTotalsRow(headers, rows);
+
       const csvContent = [
         `"Report: ${title}"`,
         `"Filter: ${reportDateFilter.toUpperCase()} (${customFromDate || 'Start'} to ${customToDate || 'Today'})"`,
@@ -2483,6 +3030,7 @@ const PosManagement: React.FC = () => {
         '',
         headers.map((h) => `"${h}"`).join(','),
         ...rows.map((row) => row.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(',')),
+        totalsRow.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','),
       ].join('\n');
 
       const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -2523,6 +3071,13 @@ const PosManagement: React.FC = () => {
         )
         .join('');
 
+      const totalsRow = calculateTableTotalsRow(headers, rows);
+      const totalsFooterHtml = `
+        <tr style="background: #0F172A; color: #ffffff; font-weight: 800; border-top: 2px solid #0F172A;">
+          ${totalsRow.map((cell) => `<td style="padding: 10px 12px; font-size: 12px; font-weight: 800; color: #ffffff;">${cell}</td>`).join('')}
+        </tr>
+      `;
+
       printWindow.document.write(`
         <!DOCTYPE html>
         <html>
@@ -2551,6 +3106,7 @@ const PosManagement: React.FC = () => {
             <table>
               <thead><tr>${tableHeaderHtml}</tr></thead>
               <tbody>${tableBodyHtml}</tbody>
+              <tfoot>${totalsFooterHtml}</tfoot>
             </table>
             <script>
               window.onload = function() { window.print(); };
@@ -2560,6 +3116,208 @@ const PosManagement: React.FC = () => {
       `);
       printWindow.document.close();
     };
+
+    const getCurrentReportData = (): { title: string; headers: string[]; rows: (string | number)[][]; kpis?: [string, string | number][] } => {
+      const liveData = reportLivePayload;
+
+      if (activeReportTab === 'summary') {
+        const liveKpis: [string, string | number][] = [
+          ['Net sales', formatMoney(liveData?.netSales ?? grossSales)],
+          ['Total Bills', liveData?.count ?? completedSales.length],
+          ['Units sold', liveData?.unitsSold ?? unitsSold],
+          ['Average bill', formatMoney(liveData?.averageBill ?? averageBill)],
+          ['Paid cash/card', formatMoney(liveData?.paidTotal ?? totalPaid)],
+          ['Credit balance', formatMoney(liveData?.creditTotal ?? totalCredit)],
+          ['Tax collected', formatMoney(liveData?.totalTax ?? totalTax)],
+          ['Discounts', formatMoney(liveData?.totalDiscount ?? totalDiscounts)],
+        ];
+
+        const topProds = (liveData?.topProducts || productReport).slice(0, 10).map((row: any) => [
+          'Top Product',
+          row.product || row.name || row.product_name,
+          row.quantity || row.qty || 0,
+          formatMoney(row.total || row.total_sales || 0),
+        ]);
+
+        const topCashiers = (liveData?.cashiers || salesByCashier).slice(0, 10).map((row: any) => [
+          'Cashier Performance',
+          row.cashier || row.cashier_name,
+          row.count || row.sales_count || 0,
+          formatMoney(row.total || row.total_sales || 0),
+        ]);
+
+        return {
+          title: 'Executive Sales Summary Report',
+          headers: ['Category', 'Name / Cashier', 'Count / Qty', 'Total Sales Volume'],
+          rows: [...topProds, ...topCashiers],
+          kpis: liveKpis,
+        };
+      }
+
+      if (activeReportTab === 'sales') {
+        const salesList = liveData?.sales || allSales;
+        return {
+          title: 'Sales Ledger Report',
+          headers: ['Sale no', 'Time', 'Customer', 'Cashier', 'Payment', 'Total', 'Status'],
+          rows: salesList.map((sale: any) => [
+            sale.sale_no,
+            formatDateTime(sale.sold_at || sale.createdAt),
+            sale.customer_name || sale.customer?.name || 'Walk-in Customer',
+            sale.cashier_name || sale.cashier?.full_name || 'Cashier',
+            sale.payment_method,
+            formatMoney(sale.total_amount),
+            sale.status,
+          ]),
+        };
+      }
+
+      if (activeReportTab === 'cashiers') {
+        const cashierList = liveData?.cashiers || salesByCashier;
+        return {
+          title: 'Cashier Performance Report',
+          headers: ['Cashier', 'Bills', 'Sales', 'Credit', 'Average Bill'],
+          rows: cashierList.map((row: any) => [
+            row.cashier || row.cashier_name,
+            row.count || row.sales_count || 0,
+            formatMoney(row.total || row.total_sales || 0),
+            formatMoney(row.credit || row.credit_amount || 0),
+            formatMoney(row.count ? (row.total || row.total_sales || 0) / row.count : 0),
+          ]),
+        };
+      }
+
+      if (activeReportTab === 'products') {
+        const prodList = liveData?.products || productReport;
+        return {
+          title: 'Product Sales Report',
+          headers: ['Product', 'SKU', 'Qty Sold', 'Discount', 'Tax', 'Total Sales'],
+          rows: prodList.map((row: any) => [
+            row.product || row.name || row.product_name,
+            row.sku || row.product_code || '-',
+            row.quantity || row.qty || 0,
+            formatMoney(row.discount || 0),
+            formatMoney(row.tax || 0),
+            formatMoney(row.total || row.total_sales || 0),
+          ]),
+        };
+      }
+
+      if (activeReportTab === 'items') {
+        const itemList = liveData?.products || productReport;
+        return {
+          title: 'Line Items Report',
+          headers: ['Line Item', 'Product SKU', 'Units Sold', 'Avg Unit Price', 'Total Sales'],
+          rows: itemList.map((row: any) => [
+            row.product || row.name || row.product_name,
+            row.sku || row.product_code || '-',
+            row.quantity || row.qty || 0,
+            formatMoney(row.quantity ? (row.total || 0) / row.quantity : 0),
+            formatMoney(row.total || row.total_sales || 0),
+          ]),
+        };
+      }
+
+      if (activeReportTab === 'inventory') {
+        const invProducts = liveData?.products || lowStockRows;
+        return {
+          title: 'Inventory & Stock Report',
+          headers: ['Product', 'SKU', 'Stock Qty', 'Minimum Stock', 'Stock Value'],
+          rows: invProducts.map((p: any) => [
+            p.name || p.product,
+            p.sku || '-',
+            p.stock ?? p.quantity ?? 0,
+            p.minimumStock ?? p.min_stock ?? 5,
+            formatMoney((p.stock ?? p.quantity ?? 0) * (p.price ?? 0)),
+          ]),
+        };
+      }
+
+      if (activeReportTab === 'payments') {
+        const pList = liveData?.paymentMethods || paymentReport;
+        return {
+          title: 'Payment Methods Breakdown Report',
+          headers: ['Payment Method', 'Transactions', 'Total Collected'],
+          rows: pList.map((row: any) => [
+            row.method || row.name || 'Cash',
+            row.count || row.sales_count || 0,
+            formatMoney(row.total || row.total_amount || row.paid || 0),
+          ]),
+        };
+      }
+
+      if (activeReportTab === 'taxDiscounts') {
+        const taxDataList = Array.isArray(liveData?.taxes) ? liveData.taxes : taxRows;
+        return {
+          title: 'Tax & Discounts Configuration Report',
+          headers: ['Tax Name', 'Percentage Rate', 'Status'],
+          rows: taxDataList.map((tax: any) => [tax.name ?? '-', `${tax.percentage ?? tax.rate ?? 0}%`, tax.status === false ? 'Inactive' : 'Active']),
+        };
+      }
+
+      const creditList = liveData?.creditSales || completedSales.filter((sale) => sale.credit_amount > 0);
+      return {
+        title: 'Customer Credit Outstanding Report',
+        headers: ['Bill No', 'Customer Name', 'Cashier', 'Credit Outstanding', 'Due Days'],
+        rows: creditList.map((sale: any) => [
+          sale.sale_no,
+          sale.customer_name || sale.customer?.name || 'Customer',
+          sale.cashier_name || sale.cashier?.full_name || 'Cashier',
+          formatMoney(sale.credit_amount || sale.credit_balance || 0),
+          sale.due_days ?? 30,
+        ]),
+      };
+    };
+
+    const renderExportButtons = (title: string, headers: string[], rows: (string | number)[][], kpis?: [string, string | number][]) => (
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginBottom: 14 }}>
+        <button
+          type="button"
+          onClick={() => exportReportToPdf(title, headers, rows, kpis)}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            border: 'none',
+            borderRadius: 8,
+            background: '#DC2626',
+            color: '#FFFFFF',
+            padding: '8px 14px',
+            fontSize: 12,
+            fontWeight: 800,
+            cursor: 'pointer',
+            boxShadow: '0 2px 8px rgba(220, 38, 38, 0.35)',
+            fontFamily: 'inherit',
+          }}
+          title="Print or Export current report as PDF document"
+        >
+          <i className="ti ti-file-text" style={{ fontSize: 15 }} aria-hidden="true" />
+          Print / Export PDF
+        </button>
+        <button
+          type="button"
+          onClick={() => exportReportToCsv(title, headers, rows)}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            border: 'none',
+            borderRadius: 8,
+            background: '#16A34A',
+            color: '#FFFFFF',
+            padding: '8px 14px',
+            fontSize: 12,
+            fontWeight: 800,
+            cursor: 'pointer',
+            boxShadow: '0 2px 8px rgba(22, 163, 74, 0.35)',
+            fontFamily: 'inherit',
+          }}
+          title="Export current report data into Excel spreadsheet (CSV)"
+        >
+          <i className="ti ti-file-spreadsheet" style={{ fontSize: 15 }} aria-hidden="true" />
+          Export Excel Sheet
+        </button>
+      </div>
+    );
 
     const renderReportBody = () => {
       // Extract backend API live payload data if present
@@ -2577,8 +3335,11 @@ const PosManagement: React.FC = () => {
           ['Discounts', formatMoney(liveData?.totalDiscount ?? totalDiscounts)],
         ];
 
+        const summaryData = getCurrentReportData();
+
         return (
           <>
+            {renderExportButtons(summaryData.title, summaryData.headers, summaryData.rows, liveKpis)}
             <div style={styles.reportKpiGrid}>
               {liveKpis.map(([label, value]) => (
                 <div key={label} style={styles.reportKpi}>
@@ -2610,14 +3371,7 @@ const PosManagement: React.FC = () => {
 
         return (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
-              <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToPdf('Sales Ledger Report', headers, rows)}>
-                <i className="ti ti-file-text" style={{ marginRight: 6 }} aria-hidden="true" /> Print / Export PDF
-              </button>
-              <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToCsv('Sales Ledger Report', headers, rows)}>
-                <i className="ti ti-file-spreadsheet" style={{ marginRight: 6 }} aria-hidden="true" /> Export Excel CSV
-              </button>
-            </div>
+            {renderExportButtons('Sales Ledger Report', headers, rows)}
             {renderSimpleReportTable('Sales ledger', headers, rows)}
           </div>
         );
@@ -2636,14 +3390,7 @@ const PosManagement: React.FC = () => {
 
         return (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
-              <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToPdf('Cashier Performance Report', headers, rows)}>
-                <i className="ti ti-file-text" style={{ marginRight: 6 }} aria-hidden="true" /> Print / Export PDF
-              </button>
-              <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToCsv('Cashier Performance Report', headers, rows)}>
-                <i className="ti ti-file-spreadsheet" style={{ marginRight: 6 }} aria-hidden="true" /> Export Excel CSV
-              </button>
-            </div>
+            {renderExportButtons('Cashier Performance Report', headers, rows)}
             {renderSimpleReportTable('Cashier performance report', headers, rows)}
           </div>
         );
@@ -2663,14 +3410,7 @@ const PosManagement: React.FC = () => {
 
         return (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
-              <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToPdf('Product Sales Report', headers, rows)}>
-                <i className="ti ti-file-text" style={{ marginRight: 6 }} aria-hidden="true" /> Print / Export PDF
-              </button>
-              <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToCsv('Product Sales Report', headers, rows)}>
-                <i className="ti ti-file-spreadsheet" style={{ marginRight: 6 }} aria-hidden="true" /> Export Excel CSV
-              </button>
-            </div>
+            {renderExportButtons('Product Sales Report', headers, rows)}
             {renderSimpleReportTable('Product sales report', headers, rows)}
           </div>
         );
@@ -2689,14 +3429,7 @@ const PosManagement: React.FC = () => {
 
         return (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
-              <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToPdf('Line Items Report', headers, rows)}>
-                <i className="ti ti-file-text" style={{ marginRight: 6 }} aria-hidden="true" /> Print / Export PDF
-              </button>
-              <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToCsv('Line Items Report', headers, rows)}>
-                <i className="ti ti-file-spreadsheet" style={{ marginRight: 6 }} aria-hidden="true" /> Export Excel CSV
-              </button>
-            </div>
+            {renderExportButtons('Line Items Report', headers, rows)}
             {renderSimpleReportTable('Line items sold report', headers, rows)}
           </div>
         );
@@ -2715,14 +3448,7 @@ const PosManagement: React.FC = () => {
 
         return (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
-              <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToPdf('Inventory Report', lowStockHeaders, lowStockData)}>
-                <i className="ti ti-file-text" style={{ marginRight: 6 }} aria-hidden="true" /> Print / Export PDF
-              </button>
-              <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToCsv('Inventory Report', lowStockHeaders, lowStockData)}>
-                <i className="ti ti-file-spreadsheet" style={{ marginRight: 6 }} aria-hidden="true" /> Export Excel CSV
-              </button>
-            </div>
+            {renderExportButtons('Inventory & Stock Report', lowStockHeaders, lowStockData)}
             <div style={styles.reportGridTwo}>
               {renderSimpleReportTable('Low stock alerts', lowStockHeaders, lowStockData)}
               {renderSimpleReportTable(
@@ -2755,14 +3481,7 @@ const PosManagement: React.FC = () => {
 
         return (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
-              <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToPdf('Payment Methods Report', headers, rows)}>
-                <i className="ti ti-file-text" style={{ marginRight: 6 }} aria-hidden="true" /> Print / Export PDF
-              </button>
-              <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToCsv('Payment Methods Report', headers, rows)}>
-                <i className="ti ti-file-spreadsheet" style={{ marginRight: 6 }} aria-hidden="true" /> Export Excel CSV
-              </button>
-            </div>
+            {renderExportButtons('Payment Methods Breakdown Report', headers, rows)}
             {renderSimpleReportTable('Payment method breakdown', headers, rows)}
           </div>
         );
@@ -2780,14 +3499,7 @@ const PosManagement: React.FC = () => {
 
         return (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
-              <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToPdf('Tax & Discounts Report', taxHeaders, taxTableRows)}>
-                <i className="ti ti-file-text" style={{ marginRight: 6 }} aria-hidden="true" /> Print / Export PDF
-              </button>
-              <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToCsv('Tax & Discounts Report', taxHeaders, taxTableRows)}>
-                <i className="ti ti-file-spreadsheet" style={{ marginRight: 6 }} aria-hidden="true" /> Export Excel CSV
-              </button>
-            </div>
+            {renderExportButtons('Tax & Discounts Configuration Report', taxHeaders, taxTableRows)}
             <div style={styles.reportGridTwo}>
               {renderSimpleReportTable('Tax configuration report', taxHeaders, taxTableRows)}
               {renderSimpleReportTable(
@@ -2822,14 +3534,7 @@ const PosManagement: React.FC = () => {
 
       return (
         <div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
-            <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToPdf('Customer Credit Report', creditHeaders, creditRows)}>
-              <i className="ti ti-file-text" style={{ marginRight: 6 }} aria-hidden="true" /> Print / Export PDF
-            </button>
-            <button type="button" style={styles.secondaryBtn} onClick={() => exportReportToCsv('Customer Credit Report', creditHeaders, creditRows)}>
-              <i className="ti ti-file-spreadsheet" style={{ marginRight: 6 }} aria-hidden="true" /> Export Excel CSV
-            </button>
-          </div>
+          {renderExportButtons('Customer Credit Outstanding Report', creditHeaders, creditRows)}
           <div style={styles.reportGridTwo}>
             {renderSimpleReportTable('Customer credit outstanding report', creditHeaders, creditRows)}
             {renderSimpleReportTable(
@@ -2854,7 +3559,7 @@ const PosManagement: React.FC = () => {
             <h2 style={styles.panelTitle}>Reports & Analytics Dashboard</h2>
             <p style={styles.panelSub}>Comprehensive reports for sales, cashiers, stock, payment methods, tax, discounts, and credit.</p>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             {isReportLoading && (
               <span style={{ fontSize: 12, fontWeight: 700, color: '#2563EB', background: 'rgba(37, 99, 235, 0.1)', padding: '4px 10px', borderRadius: 6 }}>
                 ⏳ Syncing Live API...
@@ -2864,7 +3569,61 @@ const PosManagement: React.FC = () => {
               style={styles.secondaryBtn}
               onClick={() => setReportRefreshKey((value) => value + 1)}
             >
-              Refresh Data
+              <i className="ti ti-refresh" aria-hidden="true" style={{ marginRight: 4 }} /> Refresh Data
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                const data = getCurrentReportData();
+                exportReportToPdf(data.title, data.headers, data.rows, data.kpis);
+              }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                border: 'none',
+                borderRadius: 8,
+                background: '#DC2626',
+                color: '#FFFFFF',
+                padding: '9px 14px',
+                fontSize: 13,
+                fontWeight: 800,
+                cursor: 'pointer',
+                boxShadow: '0 2px 10px rgba(220, 38, 38, 0.35)',
+                fontFamily: 'inherit',
+              }}
+              title="Print or Export current active report tab as PDF"
+            >
+              <i className="ti ti-file-text" style={{ fontSize: 16 }} aria-hidden="true" />
+              Print / Export PDF
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                const data = getCurrentReportData();
+                exportReportToCsv(data.title, data.headers, data.rows);
+              }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                border: 'none',
+                borderRadius: 8,
+                background: '#16A34A',
+                color: '#FFFFFF',
+                padding: '9px 14px',
+                fontSize: 13,
+                fontWeight: 800,
+                cursor: 'pointer',
+                boxShadow: '0 2px 10px rgba(22, 163, 74, 0.35)',
+                fontFamily: 'inherit',
+              }}
+              title="Export current active report tab data as Excel CSV file"
+            >
+              <i className="ti ti-file-spreadsheet" style={{ fontSize: 16 }} aria-hidden="true" />
+              Export Excel Sheet
             </button>
           </div>
         </div>
@@ -3804,8 +4563,26 @@ const PosManagement: React.FC = () => {
     }
 
     if (activeSection === 'salesBills') {
+      const handleSalesBillSort = (field: typeof salesBillSortField) => {
+        if (salesBillSortField === field) {
+          setSalesBillSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+        } else {
+          setSalesBillSortField(field);
+          setSalesBillSortDirection('desc');
+        }
+      };
+
+      const renderSalesBillSortIndicator = (field: typeof salesBillSortField) => {
+        if (salesBillSortField !== field) return null;
+        return salesBillSortDirection === 'asc' ? (
+          <i className="ti ti-arrow-up" style={{ color: 'var(--app-accent, #27AE4F)', marginLeft: 4, fontSize: 12 }} aria-hidden="true" />
+        ) : (
+          <i className="ti ti-arrow-down" style={{ color: 'var(--app-accent, #27AE4F)', marginLeft: 4, fontSize: 12 }} aria-hidden="true" />
+        );
+      };
+
       const filteredBills = salesReportRows.filter((sale) => {
-        const q = salesBillSearch.toLowerCase();
+        const q = salesBillSearch.trim().toLowerCase();
         const matchesSearch =
           !q ||
           sale.sale_no.toLowerCase().includes(q) ||
@@ -3816,6 +4593,51 @@ const PosManagement: React.FC = () => {
           salesBillStatusFilter === 'all' || sale.status === salesBillStatusFilter;
 
         return matchesSearch && matchesStatus;
+      }).sort((a, b) => {
+        let aVal: any;
+        let bVal: any;
+
+        switch (salesBillSortField) {
+          case 'sale_no':
+            aVal = a.sale_no;
+            bVal = b.sale_no;
+            break;
+          case 'sold_at':
+            aVal = new Date(a.sold_at || 0).getTime();
+            bVal = new Date(b.sold_at || 0).getTime();
+            break;
+          case 'customer_name':
+            aVal = (a.customer_name || 'Walk-in').toLowerCase();
+            bVal = (b.customer_name || 'Walk-in').toLowerCase();
+            break;
+          case 'cashier_name':
+            aVal = (a.cashier_name || 'Cashier').toLowerCase();
+            bVal = (b.cashier_name || 'Cashier').toLowerCase();
+            break;
+          case 'payment_method':
+            aVal = (a.payment_method || 'Cash').toLowerCase();
+            bVal = (b.payment_method || 'Cash').toLowerCase();
+            break;
+          case 'total_amount':
+            aVal = a.total_amount;
+            bVal = b.total_amount;
+            break;
+          case 'paid_amount':
+            aVal = a.paid_amount;
+            bVal = b.paid_amount;
+            break;
+          case 'status':
+            aVal = a.status;
+            bVal = b.status;
+            break;
+          default:
+            aVal = new Date(a.sold_at || 0).getTime();
+            bVal = new Date(b.sold_at || 0).getTime();
+        }
+
+        if (aVal < bVal) return salesBillSortDirection === 'asc' ? -1 : 1;
+        if (aVal > bVal) return salesBillSortDirection === 'asc' ? 1 : -1;
+        return 0;
       });
 
       const completedCount = salesReportRows.filter((s) => s.status === 'completed').length;
@@ -3827,14 +4649,27 @@ const PosManagement: React.FC = () => {
           <div style={styles.panelHeader}>
             <div>
               <h2 style={styles.panelTitle}>Sales Bill Management</h2>
-              <p style={styles.panelSub}>View, edit, search, and manage POS sales bills, customer assignments, payment methods, and statuses.</p>
+              <p style={styles.panelSub}>View, edit, arrange, and manage POS sales bills, customer assignments, payment methods, and statuses.</p>
             </div>
-            <button
-              style={styles.secondaryBtn}
-              onClick={() => setReportRefreshKey((val) => val + 1)}
-            >
-              <i className="ti ti-refresh" aria-hidden="true" style={{ marginRight: 6 }} /> Refresh Bills List
-            </button>
+            <div style={styles.headerButtonGroup}>
+              <button
+                style={styles.primaryBtn}
+                onClick={() => {
+                  setCustomerReturnSale(null);
+                  setShowCustomerReturnModal(true);
+                }}
+                title="Process Customer Item Return"
+              >
+                <i className="ti ti-rotate-2" aria-hidden="true" />
+                Process Customer Return
+              </button>
+              <button
+                style={styles.secondaryBtn}
+                onClick={() => setReportRefreshKey((val) => val + 1)}
+              >
+                <i className="ti ti-refresh" aria-hidden="true" style={{ marginRight: 6 }} /> Refresh Bills List
+              </button>
+            </div>
           </div>
 
           {/* Mini KPI Cards */}
@@ -3857,7 +4692,7 @@ const PosManagement: React.FC = () => {
             </div>
           </div>
 
-          {/* Search & Filter Bar */}
+          {/* Search, Filter & Arrange Bar */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 16, marginTop: 16 }}>
             <div style={{ position: 'relative', flex: 1, minWidth: 260 }}>
               <i className="ti ti-search" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--app-muted)', fontSize: 16 }} aria-hidden="true" />
@@ -3901,41 +4736,146 @@ const PosManagement: React.FC = () => {
                 );
               })}
             </div>
+
+            {/* Arrange / Sort Control Group */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--app-surface-soft, #f8fafc)', padding: '4px 8px', borderRadius: 8, border: '1px solid var(--app-border, #d0d5dd)' }}>
+              <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--app-muted)', textTransform: 'uppercase' }}>Arrange by:</span>
+              <select
+                style={{
+                  padding: '5px 8px',
+                  borderRadius: 6,
+                  border: '1px solid var(--app-border, #d0d5dd)',
+                  background: 'var(--app-surface, #ffffff)',
+                  color: 'var(--app-text, #1f2937)',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  outline: 'none',
+                  cursor: 'pointer',
+                }}
+                value={salesBillSortField}
+                onChange={(e) => setSalesBillSortField(e.target.value as any)}
+              >
+                <option value="sold_at">Date & Time</option>
+                <option value="sale_no">Bill Number</option>
+                <option value="customer_name">Customer Name</option>
+                <option value="cashier_name">Cashier Name</option>
+                <option value="payment_method">Payment Method</option>
+                <option value="total_amount">Grand Total</option>
+                <option value="paid_amount">Paid Amount</option>
+                <option value="status">Status</option>
+              </select>
+
+              <button
+                type="button"
+                onClick={() => setSalesBillSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+                style={{
+                  border: '1px solid var(--app-border, #d0d5dd)',
+                  borderRadius: 6,
+                  padding: '4px 8px',
+                  background: 'var(--app-surface, #ffffff)',
+                  color: 'var(--app-text, #1f2937)',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+                title={`Sort ${salesBillSortDirection === 'asc' ? 'Ascending (A-Z, 0-9)' : 'Descending (Z-A, 9-0)'}`}
+              >
+                <i className={salesBillSortDirection === 'asc' ? 'ti ti-sort-ascending' : 'ti ti-sort-descending'} aria-hidden="true" />
+                {salesBillSortDirection === 'asc' ? 'ASC' : 'DESC'}
+              </button>
+            </div>
           </div>
 
           {/* Bills Data Table */}
           <div style={styles.tableWrap}>
-            <table style={styles.table}>
+            <table style={{ width: '100%', minWidth: 1540, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+              <colgroup>
+                <col style={{ width: 190 }} />
+                <col style={{ width: 175 }} />
+                <col style={{ width: 220 }} />
+                <col style={{ width: 160 }} />
+                <col style={{ width: 140 }} />
+                <col style={{ width: 145 }} />
+                <col style={{ width: 170 }} />
+                <col style={{ width: 120 }} />
+                <col style={{ width: 150 }} />
+              </colgroup>
               <thead>
-                <tr style={styles.tr}>
-                  {['Bill No', 'Date & Time', 'Customer', 'Cashier', 'Payment Method', 'Grand Total', 'Paid / Balance', 'Status', 'Actions'].map((h) => (
-                    <th key={h} style={styles.th}>{h}</th>
-                  ))}
+                <tr style={{ background: 'var(--app-surface-soft, #f1f5f9)', borderBottom: '2px solid var(--app-border, #cbd5e1)' }}>
+                  <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSalesBillSort('sale_no')}>
+                    Bill No {renderSalesBillSortIndicator('sale_no')}
+                  </th>
+                  <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSalesBillSort('sold_at')}>
+                    Date & Time {renderSalesBillSortIndicator('sold_at')}
+                  </th>
+                  <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSalesBillSort('customer_name')}>
+                    Customer {renderSalesBillSortIndicator('customer_name')}
+                  </th>
+                  <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSalesBillSort('cashier_name')}>
+                    Cashier {renderSalesBillSortIndicator('cashier_name')}
+                  </th>
+                  <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSalesBillSort('payment_method')}>
+                    Payment Method {renderSalesBillSortIndicator('payment_method')}
+                  </th>
+                  <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSalesBillSort('total_amount')}>
+                    Grand Total {renderSalesBillSortIndicator('total_amount')}
+                  </th>
+                  <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSalesBillSort('paid_amount')}>
+                    Paid / Balance {renderSalesBillSortIndicator('paid_amount')}
+                  </th>
+                  <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', textAlign: 'center', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSalesBillSort('status')}>
+                    Status {renderSalesBillSortIndicator('status')}
+                  </th>
+                  <th style={{ ...styles.th, background: 'var(--app-surface-soft, #f1f5f9)', color: 'var(--app-text-strong, #0f172a)', padding: '12px 14px', textAlign: 'center' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredBills.map((sale) => (
-                  <tr key={sale.id} style={styles.tr}>
-                    <td style={styles.td}>
-                      <strong style={{ color: '#2563EB' }}>{sale.sale_no}</strong>
+                  <tr key={sale.id || sale.sale_no} style={{ borderBottom: '1px solid var(--app-border-soft, #e2e8f0)', background: 'var(--app-surface, #ffffff)' }}>
+                    <td style={{ padding: '14px 14px', verticalAlign: 'middle', whiteSpace: 'nowrap' }}>
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          padding: '4px 9px',
+                          borderRadius: 6,
+                          background: 'var(--app-surface-soft, #f1f5f9)',
+                          border: '1px solid var(--app-border, #d0d5dd)',
+                          fontWeight: 800,
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                          letterSpacing: '0.02em',
+                          color: '#2563EB',
+                        }}
+                      >
+                        {sale.sale_no}
+                      </span>
                     </td>
-                    <td style={styles.tdMuted}>{formatDateTime(sale.sold_at)}</td>
-                    <td style={styles.td}>
-                      <strong>{sale.customer_name || 'Walk-in Customer'}</strong>
+                    <td style={{ padding: '14px 14px', verticalAlign: 'middle', whiteSpace: 'nowrap', fontSize: 12, color: 'var(--app-muted, #64748b)' }}>
+                      {formatDateTime(sale.sold_at)}
                     </td>
-                    <td style={styles.tdMuted}>{sale.cashier_name || 'Cashier'}</td>
-                    <td style={styles.td}>
-                      <span style={{ textTransform: 'capitalize', fontWeight: 700, background: 'var(--app-surface-soft)', padding: '3px 8px', borderRadius: 6, border: '1px solid var(--app-border-soft)' }}>
+                    <td style={{ padding: '14px 14px', verticalAlign: 'middle', whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.4 }}>
+                      <strong style={{ display: 'block', fontSize: 13, color: 'var(--app-text-strong, #0f172a)' }}>
+                        {sale.customer_name || 'Walk-in Customer'}
+                      </strong>
+                    </td>
+                    <td style={{ padding: '14px 14px', verticalAlign: 'middle', whiteSpace: 'nowrap', fontSize: 12, color: 'var(--app-muted, #64748b)' }}>
+                      {sale.cashier_name || 'Cashier'}
+                    </td>
+                    <td style={{ padding: '14px 14px', verticalAlign: 'middle', whiteSpace: 'nowrap' }}>
+                      <span style={{ textTransform: 'capitalize', fontWeight: 700, background: 'var(--app-surface-soft, #f1f5f9)', padding: '3px 8px', borderRadius: 6, border: '1px solid var(--app-border-soft, #cbd5e1)', fontSize: 11 }}>
                         {sale.payment_method || 'Cash'}
                       </span>
                     </td>
-                    <td style={styles.td}>
-                      <strong style={{ fontSize: 14 }}>{formatMoney(sale.total_amount)}</strong>
+                    <td style={{ padding: '14px 14px', verticalAlign: 'middle', textAlign: 'right', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 800 }}>
+                      {formatMoney(sale.total_amount)}
                     </td>
-                    <td style={styles.tdMuted}>
-                      {formatMoney(sale.paid_amount)} / <span style={{ color: (sale.balance_amount ?? 0) > 0 ? '#EF4444' : '#27AE4F', fontWeight: 800 }}>{formatMoney(sale.balance_amount ?? 0)}</span>
+                    <td style={{ padding: '14px 14px', verticalAlign: 'middle', textAlign: 'right', whiteSpace: 'nowrap', fontSize: 12 }}>
+                      {formatMoney(sale.paid_amount)} / <span style={{ color: (sale.balance_amount ?? 0) > 0 ? '#b42318' : '#16834f', fontWeight: 800 }}>{formatMoney(sale.balance_amount ?? 0)}</span>
                     </td>
-                    <td style={styles.td}>
+                    <td style={{ padding: '14px 14px', verticalAlign: 'middle', textAlign: 'center', whiteSpace: 'nowrap' }}>
                       <span
                         style={{
                           ...styles.badge,
@@ -3949,8 +4889,8 @@ const PosManagement: React.FC = () => {
                         {sale.status}
                       </span>
                     </td>
-                    <td style={styles.td}>
-                      <div style={styles.actionGroup}>
+                    <td style={{ padding: '14px 14px', verticalAlign: 'middle', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
                         <button
                           type="button"
                           style={{ ...styles.iconBtn, color: '#2563EB' }}
@@ -3967,6 +4907,17 @@ const PosManagement: React.FC = () => {
                         >
                           <i className="ti ti-eye" aria-hidden="true" />
                         </button>
+                        <button
+                          type="button"
+                          style={{ ...styles.iconBtn, color: '#D97706' }}
+                          title="Process Return Items by Customer"
+                          onClick={() => {
+                            setCustomerReturnSale(sale);
+                            setShowCustomerReturnModal(true);
+                          }}
+                        >
+                          <i className="ti ti-rotate-2" aria-hidden="true" />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -3974,7 +4925,7 @@ const PosManagement: React.FC = () => {
                 {filteredBills.length === 0 && (
                   <tr>
                     <td style={styles.emptyCell} colSpan={9}>
-                      No sales bills found
+                      No sales bills found matching current criteria.
                     </td>
                   </tr>
                 )}
@@ -4350,6 +5301,254 @@ const PosManagement: React.FC = () => {
       );
     }
 
+    if (activeSection === 'returns') {
+      const handleReturnsSort = (field: 'return_no' | 'invoice_number' | 'customer_name' | 'returned_at' | 'items' | 'refund_method' | 'total_refund') => {
+        if (returnsSortField === field) {
+          setReturnsSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+        } else {
+          setReturnsSortField(field);
+          setReturnsSortDirection('desc');
+        }
+      };
+
+      const renderReturnsSortIndicator = (field: 'return_no' | 'invoice_number' | 'customer_name' | 'returned_at' | 'items' | 'refund_method' | 'total_refund') => {
+        if (returnsSortField !== field) {
+          return <span style={{ opacity: 0.3, marginLeft: 4, fontSize: 10 }}>↕</span>;
+        }
+        return (
+          <span style={{ color: 'var(--app-accent, #2563eb)', marginLeft: 4, fontWeight: 'bold', fontSize: 11 }}>
+            {returnsSortDirection === 'asc' ? '▲' : '▼'}
+          </span>
+        );
+      };
+
+      const filteredReturns = customerReturnsList.filter((r) => {
+        if (!returnsSearchQuery.trim()) return true;
+        const q = returnsSearchQuery.trim().toLowerCase();
+        return (
+          r.return_no.toLowerCase().includes(q) ||
+          r.invoice_number.toLowerCase().includes(q) ||
+          r.customer_name.toLowerCase().includes(q) ||
+          (r.notes && r.notes.toLowerCase().includes(q))
+        );
+      });
+
+      const sortedReturns = [...filteredReturns].sort((a, b) => {
+        let valA: any = a[returnsSortField];
+        let valB: any = b[returnsSortField];
+
+        if (returnsSortField === 'items') {
+          valA = a.items ? a.items.length : 0;
+          valB = b.items ? b.items.length : 0;
+        } else if (returnsSortField === 'returned_at') {
+          valA = new Date(a.returned_at).getTime();
+          valB = new Date(b.returned_at).getTime();
+        } else if (typeof valA === 'string') {
+          valA = valA.toLowerCase();
+          valB = (valB || '').toLowerCase();
+        }
+
+        if (valA < valB) return returnsSortDirection === 'asc' ? -1 : 1;
+        if (valA > valB) return returnsSortDirection === 'asc' ? 1 : -1;
+        return 0;
+      });
+
+      const totalReturnedVal = filteredReturns.reduce((sum, r) => sum + r.total_refund, 0);
+
+      return (
+        <section style={styles.panel}>
+          <div style={styles.panelHeader}>
+            <div>
+              <h2 style={styles.panelTitle}>Customer Sales Returns & Item Refunds</h2>
+              <p style={styles.panelSub}>Process item returns by customer, issue refunds (Cash/Store Credit/Bank), restock inventory, and audit return slips.</p>
+            </div>
+            <div style={styles.headerButtonGroup}>
+              <button
+                style={styles.primaryBtn}
+                onClick={() => {
+                  setCustomerReturnSale(null);
+                  setShowCustomerReturnModal(true);
+                }}
+                title="Process Customer Item Return"
+              >
+                <i className="ti ti-rotate-2" aria-hidden="true" />
+                Process Customer Return
+              </button>
+              <button
+                style={styles.secondaryBtn}
+                onClick={async () => {
+                  const refreshed = await getCustomerReturns();
+                  setCustomerReturnsList(refreshed);
+                }}
+              >
+                <i className="ti ti-refresh" aria-hidden="true" style={{ marginRight: 6 }} /> Refresh
+              </button>
+            </div>
+          </div>
+
+          <div style={styles.miniStatsGrid}>
+            <div style={styles.miniStat}>
+              <span style={styles.statLabel}>Total Return Slips</span>
+              <strong style={styles.statValue}>: {customerReturnsList.length}</strong>
+            </div>
+            <div style={styles.miniStat}>
+              <span style={styles.statLabel}>Total Refunds Volume</span>
+              <strong style={{ ...styles.statValue, color: '#b42318' }}>: {formatMoney(totalReturnedVal)}</strong>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+            <div style={{ ...styles.searchRow, flex: 1, minWidth: 260, margin: 0 }}>
+              <i className="ti ti-search" aria-hidden="true" />
+              <input
+                style={styles.searchInput}
+                value={returnsSearchQuery}
+                onChange={(e) => setReturnsSearchQuery(e.target.value)}
+                placeholder="Search by Return # (RET-XXXXXX), Invoice #, or Customer Name..."
+              />
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--app-surface-soft, #f8fafc)', padding: '6px 12px', borderRadius: 8, border: '1px solid var(--app-border-soft, #e2e8f0)' }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--app-muted, #64748b)', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <i className="ti ti-arrows-sort" style={{ fontSize: 14 }} aria-hidden="true" />
+                Arrange by:
+              </span>
+              <select
+                value={returnsSortField}
+                onChange={(e) => setReturnsSortField(e.target.value as any)}
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: 6,
+                  border: '1px solid var(--app-border, #cbd5e1)',
+                  background: 'var(--app-surface, #ffffff)',
+                  color: 'var(--app-text-strong, #0f172a)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  outline: 'none',
+                }}
+              >
+                <option value="returned_at">Returned Date & Time</option>
+                <option value="return_no">Return Slip No</option>
+                <option value="invoice_number">Invoice No</option>
+                <option value="customer_name">Customer Name</option>
+                <option value="items">Items Count</option>
+                <option value="refund_method">Refund Method</option>
+                <option value="total_refund">Total Refund Amount</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => setReturnsSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+                title={`Current direction: ${returnsSortDirection.toUpperCase()} - Click to switch`}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '6px 10px',
+                  borderRadius: 6,
+                  border: '1px solid var(--app-border, #cbd5e1)',
+                  background: 'var(--app-surface, #ffffff)',
+                  color: 'var(--app-text-strong, #0f172a)',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                {returnsSortDirection === 'asc' ? '▲ ASC' : '▼ DESC'}
+              </button>
+            </div>
+          </div>
+
+          <div style={styles.tableWrap}>
+            <table style={{ width: '100%', minWidth: 1540, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+              <colgroup>
+                <col style={{ width: 200 }} />
+                <col style={{ width: 180 }} />
+                <col style={{ width: 260 }} />
+                <col style={{ width: 190 }} />
+                <col style={{ width: 110 }} />
+                <col style={{ width: 150 }} />
+                <col style={{ width: 170 }} />
+                <col style={{ width: 110 }} />
+              </colgroup>
+              <thead>
+                <tr style={{ background: 'var(--app-surface-soft, #f1f5f9)', borderBottom: '2px solid var(--app-border)' }}>
+                  <th style={{ ...styles.th, cursor: 'pointer', userSelect: 'none' }} onClick={() => handleReturnsSort('return_no')}>
+                    Return Slip No {renderReturnsSortIndicator('return_no')}
+                  </th>
+                  <th style={{ ...styles.th, cursor: 'pointer', userSelect: 'none' }} onClick={() => handleReturnsSort('invoice_number')}>
+                    Invoice No {renderReturnsSortIndicator('invoice_number')}
+                  </th>
+                  <th style={{ ...styles.th, cursor: 'pointer', userSelect: 'none' }} onClick={() => handleReturnsSort('customer_name')}>
+                    Customer Name {renderReturnsSortIndicator('customer_name')}
+                  </th>
+                  <th style={{ ...styles.th, cursor: 'pointer', userSelect: 'none' }} onClick={() => handleReturnsSort('returned_at')}>
+                    Returned Date {renderReturnsSortIndicator('returned_at')}
+                  </th>
+                  <th style={{ ...styles.th, textAlign: 'center', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleReturnsSort('items')}>
+                    Items {renderReturnsSortIndicator('items')}
+                  </th>
+                  <th style={{ ...styles.th, cursor: 'pointer', userSelect: 'none' }} onClick={() => handleReturnsSort('refund_method')}>
+                    Refund Method {renderReturnsSortIndicator('refund_method')}
+                  </th>
+                  <th style={{ ...styles.th, textAlign: 'right', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleReturnsSort('total_refund')}>
+                    Total Refund {renderReturnsSortIndicator('total_refund')}
+                  </th>
+                  <th style={{ ...styles.th, textAlign: 'center' }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedReturns.map((ret) => (
+                  <tr key={ret.id || ret.return_no} style={{ borderBottom: '1px solid var(--app-border-soft)', background: 'var(--app-surface, #ffffff)' }}>
+                    <td style={{ padding: '12px 14px', verticalAlign: 'middle', whiteSpace: 'nowrap' }}>
+                      <strong style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--app-accent-strong)' }}>{ret.return_no}</strong>
+                    </td>
+                    <td style={{ padding: '12px 14px', verticalAlign: 'middle', whiteSpace: 'nowrap' }}>
+                      <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{ret.invoice_number}</span>
+                    </td>
+                    <td style={{ padding: '12px 14px', verticalAlign: 'middle', whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.4 }}>
+                      <strong style={{ color: 'var(--app-text-strong)' }}>{ret.customer_name}</strong>
+                    </td>
+                    <td style={{ padding: '12px 14px', verticalAlign: 'middle', whiteSpace: 'nowrap', fontSize: 12, color: 'var(--app-muted)' }}>
+                      {new Date(ret.returned_at).toLocaleString('en-LK')}
+                    </td>
+                    <td style={{ padding: '12px 14px', verticalAlign: 'middle', textAlign: 'center' }}>
+                      <span style={styles.badge}>{ret.items ? ret.items.length : 0} items</span>
+                    </td>
+                    <td style={{ padding: '12px 14px', verticalAlign: 'middle' }}>
+                      <span style={{ fontWeight: 700, padding: '3px 8px', borderRadius: 6, background: 'var(--app-surface-soft)', border: '1px solid var(--app-border-soft)', fontSize: 12 }}>
+                        {ret.refund_method}
+                      </span>
+                    </td>
+                    <td style={{ padding: '12px 14px', verticalAlign: 'middle', textAlign: 'right', fontWeight: 800, color: '#b42318', fontSize: 13 }}>
+                      {formatMoney(ret.total_refund)}
+                    </td>
+                    <td style={{ padding: '12px 14px', verticalAlign: 'middle', textAlign: 'center' }}>
+                      <button
+                        type="button"
+                        style={{ ...styles.iconBtn, color: '#2563EB' }}
+                        onClick={() => setViewingReturnRecord(ret)}
+                        title="View Return Slip Details"
+                      >
+                        <i className="ti ti-eye" aria-hidden="true" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {sortedReturns.length === 0 && (
+                  <tr>
+                    <td colSpan={8} style={styles.emptyCell}>
+                      No customer sales returns recorded yet. Click "Process Customer Return" above to process an item refund.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      );
+    }
+
     if (activeSection === 'reports') {
       return renderReportSection();
     }
@@ -4458,6 +5657,71 @@ const PosManagement: React.FC = () => {
         {renderContent()}
       </div>
 
+      {showReceiveStock && (
+        <ReceiveSupplierStockModal
+          products={products}
+          suppliers={suppliers}
+          supplierBalances={supplierBalances}
+          productToSelect={receivingProductToSelect}
+          onRequestAddProduct={() => {
+            setEditingProduct(null);
+            setShowAddProduct(true);
+          }}
+          onClose={() => setShowReceiveStock(false)}
+          onSaved={async (purchase, shouldPrint) => {
+            // Apply the received quantities immediately, then confirm with IndexedDB.
+            setProducts((previous) => previous.map((product) => {
+              const receivedLine = purchase.lines.find((line) => line.product_id === product.id);
+              if (!receivedLine) return product;
+
+              const stock = product.stock + receivedLine.quantity;
+              return {
+                ...product,
+                stock,
+                ...(receivedLine.selling_price && receivedLine.selling_price > 0
+                  ? { price: receivedLine.selling_price, cost_price: receivedLine.unit_cost }
+                  : { cost_price: receivedLine.unit_cost }),
+                status: stock <= 0
+                  ? 'Inactive'
+                  : stock <= product.minimumStock
+                    ? 'Low stock'
+                    : 'Active',
+              };
+            }));
+            setSupplierBalances((previous) => ({
+              ...previous,
+              [purchase.supplier_id]: (previous[purchase.supplier_id] || 0) + purchase.credit_amount,
+            }));
+            setShowReceiveStock(false);
+
+            if (shouldPrint) {
+              setActiveGrnPurchase(purchase);
+            }
+
+            const refreshedProducts = await getAllProducts();
+            setProducts(refreshedProducts);
+            const [refreshedTransactions, refreshedPurchases] = await Promise.all([
+              getSupplierTransactions(),
+              getSupplierPurchases(),
+            ]);
+            setSupplierTransactions(refreshedTransactions);
+            setSupplierPurchases(refreshedPurchases);
+            const movementRows = await getPosMasterRecords(API_RESOURCES.STOCK_MOVEMENTS, 'stockMovements');
+            setResourceRows((previous) => ({ ...previous, stockMovements: movementRows }));
+          }}
+          onSupplierCreated={(supplier) => setSuppliers((previous) => (
+            previous.some((item) => item.id === supplier.id) ? previous : [...previous, supplier]
+          ))}
+        />
+      )}
+
+      {activeGrnPurchase && (
+        <PurchaseGrnModal
+          purchase={activeGrnPurchase}
+          onClose={() => setActiveGrnPurchase(null)}
+        />
+      )}
+
       {showAddProduct && (
         <AddProductModal
           product={editingProduct}
@@ -4470,6 +5734,7 @@ const PosManagement: React.FC = () => {
             setEditingProduct(null);
           }}
           onSaved={(product) => {
+            setReceivingProductToSelect(product);
             setProducts((previous) => {
               const exists = previous.some((item) => item.id === product.id);
               return exists
@@ -4488,6 +5753,35 @@ const PosManagement: React.FC = () => {
           }}
           onSupplierCreated={(supplier) => {
             setSuppliers((previous) => [supplier, ...previous]);
+          }}
+        />
+      )}
+
+      {creditSupplier && (
+        <SupplierCreditModal
+          supplier={creditSupplier}
+          balance={supplierBalances[creditSupplier.id] || 0}
+          purchases={supplierPurchases}
+          transactions={supplierTransactions}
+          onViewGrn={(p) => setActiveGrnPurchase(p)}
+          onClose={() => setCreditSupplier(null)}
+          onPaid={async () => {
+            const [refreshedTransactions, refreshedPurchases] = await Promise.all([
+              getSupplierTransactions(),
+              getSupplierPurchases(),
+            ]);
+            setSupplierTransactions(refreshedTransactions);
+            setSupplierPurchases(refreshedPurchases);
+            setSupplierBalances(refreshedTransactions.reduce<Record<number, number>>((balances, transaction) => {
+              const signedAmount = transaction.type === 'purchase' ? transaction.amount : -transaction.amount;
+              balances[transaction.supplier_id] = (balances[transaction.supplier_id] || 0) + signedAmount;
+              return balances;
+            }, {}));
+            if (activeGrnPurchase) {
+              const updatedActive = refreshedPurchases.find((p) => p.id === activeGrnPurchase.id || p.purchase_no === activeGrnPurchase.purchase_no);
+              if (updatedActive) setActiveGrnPurchase(updatedActive);
+            }
+            setCreditSupplier(null);
           }}
         />
       )}
@@ -4557,6 +5851,148 @@ const PosManagement: React.FC = () => {
             });
           }}
         />
+      )}
+
+      {showCustomerReturnModal && (
+        <CustomerReturnModal
+          sale={customerReturnSale}
+          allSales={salesReportRows}
+          customers={customers}
+          onClose={() => {
+            setShowCustomerReturnModal(false);
+            setCustomerReturnSale(null);
+          }}
+          onReturnProcessed={async () => {
+            const [refreshedProducts, refreshedSales, refreshedCustomers, refreshedReturns] = await Promise.all([
+              getAllProducts(),
+              getPosSales(),
+              getAllCustomers(),
+              getCustomerReturns(),
+            ]);
+            setProducts(refreshedProducts);
+            setSalesReportRows(refreshedSales);
+            setCustomers(refreshedCustomers);
+            setCustomerReturnsList(refreshedReturns);
+            const movementRows = await getPosMasterRecords(API_RESOURCES.STOCK_MOVEMENTS, 'stockMovements');
+            setResourceRows((previous) => ({ ...previous, stockMovements: movementRows }));
+          }}
+        />
+      )}
+
+      {viewingReturnRecord && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 26000,
+            background: 'rgba(15, 23, 42, 0.75)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setViewingReturnRecord(null);
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 680,
+              background: 'var(--app-surface, #ffffff)',
+              border: '1px solid var(--app-border, #d0d5dd)',
+              borderRadius: 12,
+              padding: 20,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 14,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--app-accent, #27AE4F)', textTransform: 'uppercase' }}>
+                  CUSTOMER RETURN SLIP DETAILS
+                </span>
+                <h3 style={{ fontSize: 18, fontWeight: 800, margin: '2px 0 0', color: 'var(--app-text-strong)' }}>
+                  {viewingReturnRecord.return_no}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewingReturnRecord(null)}
+                style={styles.iconBtn}
+              >
+                <i className="ti ti-x" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, background: 'var(--app-surface-soft)', padding: 12, borderRadius: 8 }}>
+              <div>
+                <span style={{ fontSize: 11, color: 'var(--app-muted)', fontWeight: 600 }}>Original Invoice</span>
+                <div style={{ fontWeight: 800, fontSize: 13 }}>{viewingReturnRecord.invoice_number}</div>
+              </div>
+              <div>
+                <span style={{ fontSize: 11, color: 'var(--app-muted)', fontWeight: 600 }}>Customer</span>
+                <div style={{ fontWeight: 800, fontSize: 13 }}>{viewingReturnRecord.customer_name}</div>
+              </div>
+              <div>
+                <span style={{ fontSize: 11, color: 'var(--app-muted)', fontWeight: 600 }}>Refund Method</span>
+                <div style={{ fontWeight: 800, fontSize: 13, color: '#16834f' }}>{viewingReturnRecord.refund_method}</div>
+              </div>
+            </div>
+
+            <div style={{ overflowX: 'auto', border: '1px solid var(--app-border-soft)', borderRadius: 8 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: 'var(--app-surface-soft)', borderBottom: '1px solid var(--app-border)' }}>
+                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>Product</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'center' }}>Return Qty</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>Reason</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'center' }}>Restocked?</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'right' }}>Refund Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {viewingReturnRecord.items.map((item, idx) => (
+                    <tr key={idx} style={{ borderBottom: '1px solid var(--app-border-soft)' }}>
+                      <td style={{ padding: '8px 10px' }}><strong>{item.product_name}</strong></td>
+                      <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 800 }}>{item.quantity}</td>
+                      <td style={{ padding: '8px 10px' }}>{item.reason}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                        <span style={{ padding: '2px 6px', borderRadius: 4, background: item.restock ? 'rgba(39,174,79,0.12)' : 'rgba(239,68,68,0.12)', color: item.restock ? '#16834f' : '#b42318', fontWeight: 800, fontSize: 10 }}>
+                          {item.restock ? 'YES' : 'NO'}
+                        </span>
+                      </td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 800 }}>{formatMoney(item.refund_amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--app-surface-soft)', padding: '10px 14px', borderRadius: 8 }}>
+              <div>
+                {viewingReturnRecord.notes && (
+                  <span style={{ fontSize: 12, color: 'var(--app-muted)' }}>Notes: {viewingReturnRecord.notes}</span>
+                )}
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>
+                Total Refunded: <strong style={{ fontSize: 16, color: '#b42318' }}>{formatMoney(viewingReturnRecord.total_refund)}</strong>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 4 }}>
+              <button
+                type="button"
+                style={styles.secondaryBtn}
+                onClick={() => setViewingReturnRecord(null)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showAddCustomer && (
@@ -4874,6 +6310,19 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     cursor: 'pointer',
     fontFamily: 'inherit',
+  },
+  supplierCreditButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
+    border: '1px solid var(--app-border-soft, #d0d5dd)',
+    borderRadius: 6,
+    padding: '5px 8px',
+    background: 'var(--app-surface, #fff)',
+    color: 'var(--app-text)',
+    cursor: 'pointer',
+    font: 'inherit',
+    fontSize: 12,
   },
   headerButtonGroup: {
     display: 'flex',
